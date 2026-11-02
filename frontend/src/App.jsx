@@ -397,41 +397,83 @@ export default function App() {
 }
 
 // ==========================================================================
-// 5. LOGIN PAGE (MODERN ENTERPRISE SPLIT SCREEN)
+// 5. SHARED SIGN-IN AND SIGN-UP PAGE
 // ==========================================================================
 
 function LoginPage({ onLogin }) {
-  const [role, setRole] = useState("admin");
+  const [mode, setMode] = useState("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+
+  function finishLogin(result, fallbackEmail) {
+    if (!result.access_token || !["admin", "employee"].includes(result.role)) {
+      throw new Error("The server returned an invalid login response. Please try again.");
+    }
+
+    saveToken(result.access_token);
+    onLogin({
+      name: result.name || "",
+      email: result.email || fallbackEmail,
+      role: result.role,
+    });
+  }
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setNotice("");
     setLoading(true);
 
     try {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (mode === "signup") {
+        try {
+          await api("/auth/signup", {
+            method: "POST",
+            body: JSON.stringify({
+              name: name.trim(),
+              email: normalizedEmail,
+              password,
+            }),
+          });
+        } catch (signupError) {
+          if (signupError.status !== 409) {
+            throw signupError;
+          }
+
+          const result = await api("/auth/login", {
+            method: "POST",
+            body: JSON.stringify({
+              email: normalizedEmail,
+              password,
+            }),
+          });
+          finishLogin(result, normalizedEmail);
+          return;
+        }
+
+        setMode("login");
+        setName("");
+        setPassword("");
+        setNotice("Your account is ready. Sign in with your email and password.");
+        return;
+      }
+
       const result = await api("/auth/login", {
         method: "POST",
         body: JSON.stringify({
-          email: email.trim().toLowerCase(),
+          email: normalizedEmail,
           password,
         }),
       });
 
-      if (result.role !== role) {
-        throw new Error(
-          `This account has the role "${result.role}". Please switch to ${result.role === "admin" ? "Admin" : "Employee"} Login.`
-        );
-      }
-
-      saveToken(result.access_token);
-
-      const account = await api("/auth/me");
-      onLogin(account);
+      finishLogin(result, normalizedEmail);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -440,170 +482,161 @@ function LoginPage({ onLogin }) {
   }
 
   return (
-    <div className="auth-split-wrapper">
-      {/* Left Column: Brand Hero Banner */}
-      <section className="auth-hero-panel">
-        <div className="auth-brand">
+    <main className="auth-single-wrapper">
+      <section className="auth-single-card">
+        <div className="auth-single-brand">
           <div className="brand-icon-box">
             <UsersIcon size={24} />
           </div>
           <div>
-            <div className="brand-text-title">Employee Management System</div>
-            <div className="brand-text-subtitle">Enterprise Suite</div>
+            <div className="auth-single-brand-title">Employee Management</div>
+            <div className="auth-single-brand-caption">Your people workspace</div>
           </div>
         </div>
 
-        <div className="auth-hero-content">
-          <div className="auth-hero-badge">
-            <ShieldIcon size={14} />
-            <span>Secure Enterprise Workspace</span>
-          </div>
-          <h1 className="auth-hero-title">
-            Employee <span>Management System.</span>
-          </h1>
-          <p className="auth-hero-desc">
-            Empower your HR administration with real-time employee tracking, instant credentials generation, role-based controls, and seamless department management.
+        <div className="auth-header">
+          <h2>{mode === "login" ? "Welcome back" : "Create your account"}</h2>
+          <p className="subtext">
+            {mode === "login"
+              ? "Sign in with your work email and password."
+              : "Create an employee account using your registered work email."}
           </p>
-
-          <div className="auth-feature-list">
-            <div className="auth-feature-item">
-              <div className="auth-feature-check"><CheckIcon size={14} /></div>
-              <span>Role-Based Access Control (Admin & Employee)</span>
-            </div>
-            <div className="auth-feature-item">
-              <div className="auth-feature-check"><CheckIcon size={14} /></div>
-              <span>Automatic Temporary Credential Provisioning</span>
-            </div>
-            <div className="auth-feature-item">
-              <div className="auth-feature-check"><CheckIcon size={14} /></div>
-              <span>JWT Authentication & MongoDB Atlas Backend</span>
-            </div>
-          </div>
         </div>
 
-        <div className="auth-hero-footer">
-          <span>&copy; {new Date().getFullYear()} Employee Management System</span>
-          <span>Enterprise Portal</span>
+        <div className="auth-mode-switch" aria-label="Account action">
+          <button
+            type="button"
+            className={mode === "login" ? "active" : ""}
+            aria-pressed={mode === "login"}
+            disabled={loading}
+            onClick={() => {
+              setMode("login");
+              setError("");
+              setNotice("");
+            }}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            className={mode === "signup" ? "active" : ""}
+            aria-pressed={mode === "signup"}
+            disabled={loading}
+            onClick={() => {
+              setMode("signup");
+              setError("");
+              setNotice("");
+            }}
+          >
+            Create account
+          </button>
         </div>
-      </section>
 
-      {/* Right Column: Clean Login Form */}
-      <section className="auth-form-panel">
-        <div className="auth-card-inner">
-          <div className="auth-header">
-            <h2>Welcome Back</h2>
-            <p className="subtext">Please select your role and sign in to your portal.</p>
+        {error && (
+          <div className="auth-form-message error" role="alert">
+            <AlertCircleIcon size={18} />
+            <span>{error}</span>
           </div>
+        )}
 
-          {/* Role Tabs */}
-          <div className="role-tab-group">
-            <button
-              type="button"
-              className={`role-tab-btn ${role === "admin" ? "active" : ""}`}
-              onClick={() => {
-                setRole("admin");
-                setError("");
-              }}
-            >
-              <ShieldIcon size={16} />
-              <span>Admin Login</span>
-            </button>
-            <button
-              type="button"
-              className={`role-tab-btn ${role === "employee" ? "active" : ""}`}
-              onClick={() => {
-                setRole("employee");
-                setError("");
-              }}
-            >
-              <UsersIcon size={16} />
-              <span>Employee Login</span>
-            </button>
+        {notice && (
+          <div className="auth-form-message success" role="status">
+            <CheckCircleIcon size={18} />
+            <span>{notice}</span>
           </div>
+        )}
 
-          {/* Error Alert */}
-          {error && (
-            <div className="toast-item error" style={{ minWidth: "auto", marginBottom: "1.25rem" }}>
-              <AlertCircleIcon size={18} />
-              <span style={{ fontSize: "0.825rem" }}>{error}</span>
+        <form onSubmit={handleSubmit}>
+          {mode === "signup" && (
+            <div className="form-group">
+              <label className="form-label" htmlFor="signup-name">Full name</label>
+              <input
+                id="signup-name"
+                name="name"
+                type="text"
+                className="input-field no-icon"
+                placeholder="Your name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                maxLength={100}
+                required
+              />
             </div>
           )}
 
-          <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label className="form-label" htmlFor="login-email">
-                Work Email Address
-              </label>
-              <div className="input-container">
-                <MailIcon size={18} className="input-icon-left" />
-                <input
-                  id="login-email"
-                  type="email"
-                  className="input-field"
-                  placeholder={role === "admin" ? "admin@company.com" : "employee@company.com"}
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="username"
-                  required
-                />
-              </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="auth-email">Work email</label>
+            <div className="input-container">
+              <MailIcon size={18} className="input-icon-left" />
+              <input
+                id="auth-email"
+                name="email"
+                type="email"
+                className="input-field"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                required
+              />
             </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="login-password">
-                Password
-              </label>
-              <div className="input-container">
-                <KeyIcon size={18} className="input-icon-left" />
-                <input
-                  id="login-password"
-                  type={showPassword ? "text" : "password"}
-                  className="input-field"
-                  placeholder="Enter your secure password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-                <button
-                  type="button"
-                  className="input-icon-right"
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              style={{ width: "100%", padding: "0.75rem", marginTop: "0.5rem" }}
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <RefreshCwIcon size={16} className="animate-spin" />
-                  <span>Authenticating...</span>
-                </>
-              ) : (
-                <span>Sign In as {role === "admin" ? "Administrator" : "Employee"}</span>
-              )}
-            </button>
-          </form>
-
-          <div className="auth-hint-box">
-            <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
-            <span>
-              {role === "admin"
-                ? "Admin accounts have full oversight to provision, update, and manage company records."
-                : "Employees should use the registered email and temporary password provided by your company admin."}
-            </span>
           </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="auth-password">Password</label>
+            <div className="input-container">
+              <KeyIcon size={18} className="input-icon-left" />
+              <input
+                id="auth-password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                className="input-field"
+                placeholder={mode === "signup" ? "At least 8 characters" : "Enter your password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                minLength={mode === "signup" ? 8 : undefined}
+                maxLength={128}
+                required
+              />
+              <button
+                type="button"
+                className="input-icon-right"
+                onClick={() => setShowPassword((visible) => !visible)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            className="btn btn-primary auth-submit-button"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <RefreshCwIcon size={16} className="animate-spin" />
+                <span>{mode === "login" ? "Signing in..." : "Creating account..."}</span>
+              </>
+            ) : (
+              <span>{mode === "login" ? "Sign in" : "Create account"}</span>
+            )}
+          </button>
+        </form>
+
+        <div className="auth-hint-box auth-single-hint">
+          <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
+          <span>
+            {mode === "login"
+              ? "Your account type is detected automatically when you sign in."
+              : "Employee sign-up is available after an administrator adds your employee record. Admin accounts are created by system administrators."}
+          </span>
         </div>
       </section>
-    </div>
+    </main>
   );
 }
 
@@ -614,6 +647,7 @@ function LoginPage({ onLogin }) {
 function AdminDashboard({ user, onLogout, showToast }) {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState("checking");
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -628,10 +662,13 @@ function AdminDashboard({ user, onLogout, showToast }) {
 
   async function loadEmployees() {
     setLoading(true);
+    setConnectionStatus("checking");
     try {
       const data = await api("/employees");
       setEmployees(Array.isArray(data) ? data : []);
+      setConnectionStatus("connected");
     } catch (err) {
+      setConnectionStatus("unavailable");
       showToast(getErrorMessage(err), "error");
     } finally {
       setLoading(false);
@@ -682,6 +719,14 @@ function AdminDashboard({ user, onLogout, showToast }) {
   return (
     <div className="app-shell">
       {/* Sidebar Navigation */}
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="Close navigation menu"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <aside className={`ems-sidebar ${sidebarOpen ? "open" : ""}`}>
         <div>
           <div className="sidebar-header">
@@ -698,6 +743,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
               className="btn-icon"
               style={{ color: "#94a3b8" }}
               onClick={() => setSidebarOpen(false)}
+              aria-label="Close navigation menu"
             >
               <XIcon size={18} />
             </button>
@@ -771,6 +817,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
               className="topbar-mobile-toggle"
               onClick={() => setSidebarOpen(true)}
               aria-label="Open sidebar"
+              aria-expanded={sidebarOpen}
             >
               <MenuIcon size={22} />
             </button>
@@ -784,9 +831,15 @@ function AdminDashboard({ user, onLogout, showToast }) {
           </div>
 
           <div className="topbar-right">
-            <div className="topbar-status-chip">
+            <div className={`topbar-status-chip ${connectionStatus}`}>
               <span className="status-dot"></span>
-              <span>FastAPI & Mongo Connected</span>
+              <span>
+                {connectionStatus === "connected"
+                  ? "API connected"
+                  : connectionStatus === "unavailable"
+                    ? "API unavailable"
+                    : "Checking API"}
+              </span>
             </div>
 
             <div className="topbar-profile">
@@ -810,6 +863,28 @@ function AdminDashboard({ user, onLogout, showToast }) {
 
         {/* Scrollable Dashboard Body */}
         <main className="ems-content-area">
+          <section className="page-intro">
+            <div>
+              <p className="page-eyebrow">PEOPLE OPERATIONS</p>
+              <h1>
+                {activeTab === "dashboard"
+                  ? `Welcome back, ${(user.name || "there").split(" ")[0]}.`
+                  : "Employee directory"}
+              </h1>
+              <p className="page-description">
+                {activeTab === "dashboard"
+                  ? "A clear overview of your people, departments, and workspace."
+                  : "Search, review, and manage your employee records in one place."}
+              </p>
+            </div>
+            {activeTab === "dashboard" && (
+              <button className="btn btn-primary page-intro-action" onClick={handleOpenAdd}>
+                <PlusIcon size={16} />
+                <span>Add employee</span>
+              </button>
+            )}
+          </section>
+
           {/* Stat Cards */}
           <section className="stats-grid">
             <div className="stat-card">
@@ -836,14 +911,14 @@ function AdminDashboard({ user, onLogout, showToast }) {
 
             <div className="stat-card">
               <div>
-                <div className="stat-info-title">Security & Role System</div>
-                <div className="stat-info-value" style={{ fontSize: "1.45rem", color: "#059669" }}>
-                  Active & Enforced
+                <div className="stat-info-title">Resumes on file</div>
+                <div className="stat-info-value">
+                  {employees.filter((employee) => employee.resume_original_name).length}
                 </div>
-                <div className="stat-info-desc">JWT Auth & Argon2/PasswordHash</div>
+                <div className="stat-info-desc">Employee documents uploaded</div>
               </div>
-              <div className="stat-icon-wrapper stat-icon-amber">
-                <ShieldIcon size={24} />
+              <div className="stat-icon-wrapper stat-icon-sky">
+                <FileTextIcon size={22} />
               </div>
             </div>
           </section>
@@ -938,7 +1013,21 @@ function AdminDashboard({ user, onLogout, showToast }) {
                       <h2>Quick Actions & Health</h2>
                       <p>Operational shortcuts and environment status</p>
                     </div>
-                    <span className="badge badge-emerald">Operational</span>
+                    <span
+                      className={`badge ${
+                        connectionStatus === "connected"
+                          ? "badge-emerald"
+                          : connectionStatus === "unavailable"
+                            ? "badge-amber"
+                            : "badge-gray"
+                      }`}
+                    >
+                      {connectionStatus === "connected"
+                        ? "API connected"
+                        : connectionStatus === "unavailable"
+                          ? "API unavailable"
+                          : "Checking API"}
+                    </span>
                   </div>
                   <div
                     style={{
@@ -993,8 +1082,12 @@ function AdminDashboard({ user, onLogout, showToast }) {
                     <div className="auth-hint-box" style={{ marginTop: "0.5rem" }}>
                       <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
                       <span>
-                        <strong>System Health:</strong> Connected to MongoDB Atlas. Role-based JWT
-                        authentication active.
+                        <strong>System status:</strong>{" "}
+                        {connectionStatus === "connected"
+                          ? "The employee service responded successfully."
+                          : connectionStatus === "unavailable"
+                            ? "The employee service did not respond. Check the backend and try refreshing."
+                            : "Checking employee service availability."}
                       </span>
                     </div>
                   </div>
@@ -1610,7 +1703,13 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
                       type="button"
                       className="btn btn-secondary"
                       style={{ padding: "0.35rem 0.65rem", fontSize: "0.8rem" }}
-                      onClick={() => downloadFile(`/employees/${getEmployeeId(employee)}/resume`)}
+                      onClick={async () => {
+                        try {
+                          await downloadFile(`/employees/${getEmployeeId(employee)}/resume`);
+                        } catch (err) {
+                          showToast(getErrorMessage(err), "error");
+                        }
+                      }}
                     >
                       <FileTextIcon size={14} />
                       <span>View PDF</span>
@@ -1713,7 +1812,7 @@ function TemporaryPasswordModal({ data, onClose, showToast }) {
           <div className="auth-hint-box" style={{ marginTop: "1rem" }}>
             <AlertCircleIcon size={18} style={{ color: "#d97706", flexShrink: 0 }} />
             <span>
-              <strong>Important:</strong> For security reasons, this plaintext password will not be displayed again. The employee will use this password to sign in via Employee Login.
+              <strong>Important:</strong> For security reasons, this plaintext password will not be displayed again. The employee can use it to sign in through the shared portal.
             </span>
           </div>
         </div>
@@ -1933,7 +2032,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
   async function loadProfile() {
     setLoading(true);
     try {
-      const data = await api("/employee/me");
+      const data = await api("/employees/me");
       setProfile({
         name: data.name || "",
         email: data.email || "",
@@ -1974,7 +2073,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
 
     reader.onload = async () => {
       try {
-        const result = await api("/employee/me/resume", {
+        const result = await api("/employees/me/resume", {
           method: "POST",
           body: JSON.stringify({
             filename: file.name,
@@ -2009,7 +2108,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
 
   async function handleViewResume() {
     try {
-      await downloadFile("/employee/me/resume");
+      await downloadFile("/employees/me/resume");
     } catch (err) {
       showToast(getErrorMessage(err), "error");
     }
@@ -2022,7 +2121,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
     if (!confirmed) return;
 
     try {
-      await api("/employee/me/resume", { method: "DELETE" });
+      await api("/employees/me/resume", { method: "DELETE" });
       setProfile((prev) => ({
         ...prev,
         resume_original_name: null,
@@ -2051,7 +2150,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
     setSavingProfile(true);
 
     try {
-      const updated = await api("/employee/me", {
+      const updated = await api("/employees/me", {
         method: "PUT",
         body: JSON.stringify({
           name: profile.name.trim(),
@@ -2087,7 +2186,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
     setSavingPassword(true);
 
     try {
-      await api("/employee/me/password", {
+      await api("/employees/me/password", {
         method: "PUT",
         body: JSON.stringify({
           current_password: passwordForm.current_password,

@@ -4,6 +4,11 @@ export const API_URL = (
 
 const TOKEN_KEY = "employee_app_token";
 
+function getEndpointUrl(path) {
+  const endpoint = path.replace(/^\/+/, "");
+  return new URL(endpoint, `${API_URL}/`).toString();
+}
+
 export function saveToken(token) {
   localStorage.setItem(TOKEN_KEY, token);
 }
@@ -23,12 +28,24 @@ export async function downloadFile(path) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_URL}${path}`, { headers });
+  let response;
+  try {
+    response = await fetch(getEndpointUrl(path), { headers });
+  } catch {
+    throw new Error(
+      "Cannot connect to the backend. Make sure FastAPI is running at " +
+        API_URL,
+    );
+  }
   if (!response.ok) {
     const errorData = await response.json().catch(() => null);
-    throw new Error(
-      errorData?.detail || `Failed to download document (${response.status})`
-    );
+    const detail = errorData?.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((item) => item.msg).join(", ")
+      : typeof detail === "string"
+        ? detail
+        : `Failed to download document (${response.status})`;
+    throw Object.assign(new Error(message), { status: response.status });
   }
 
   const blob = await response.blob();
@@ -54,7 +71,7 @@ export async function api(path, options = {}) {
   let response;
 
   try {
-    response = await fetch(`${API_URL}${path}`, {
+    response = await fetch(getEndpointUrl(path), {
       ...options,
       headers,
     });
@@ -76,9 +93,8 @@ export async function api(path, options = {}) {
         ? detail
         : `Request failed with status ${response.status}`;
 
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: response.status });
   }
 
   return data;
 }
-

@@ -1,4 +1,3 @@
-
 import os
 
 from dotenv import load_dotenv
@@ -6,42 +5,31 @@ from pymongo import MongoClient
 
 load_dotenv()
 
+# Read MongoDB URL from .env file
 MONGO_URL = os.getenv("MONGO_URL")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "employee_db")
 
 if not MONGO_URL:
-    raise ValueError(
-        "MONGO_URL is missing. Please configure it in your backend .env file."
-    )
+    raise ValueError("MONGO_URL is missing. Please add it to your backend .env file.")
 
+# Connect to MongoDB Atlas
+# tlsAllowInvalidCertificates=True fixes SSL handshake errors on some networks/Python versions
 client = MongoClient(
     MONGO_URL,
-    serverSelectionTimeoutMS=5000
+    serverSelectionTimeoutMS=10000,
+    tlsAllowInvalidCertificates=True
 )
 
-db = client[DATABASE_NAME]
-
-# Collections used by the application
+# Select the database and collections
+db = client["employee_management"]
 users_collection = db["users"]
 employees_collection = db["employees"]
 
 
-def check_database_connection():
-    """Check whether MongoDB is reachable."""
-    client.admin.command("ping")
-    return True
-
-
 def init_db_indexes():
-    """
-    Ensure unique indexes on email for both users and employees.
-    Gracefully catches errors if existing duplicates prevent index creation.
-    """
+    """Create unique indexes on email to prevent duplicate accounts."""
     try:
         users_collection.create_index("email", unique=True)
         employees_collection.create_index("email", unique=True)
-        print("MongoDB unique email indexes successfully initialized.")
+        print("MongoDB indexes created successfully.")
     except Exception as e:
-        print(f"[Warning] Could not apply unique email index: {e}")
-        print("Please clean duplicate test records from MongoDB Atlas to enable strict unique indexing.")
-
+        print(f"[Warning] Could not create indexes: {e}")
