@@ -23,6 +23,7 @@ client = MongoClient(
 db = client["employee_management"]
 users_collection = db["users"]
 employees_collection = db["employees"]
+account_requests_collection = db["account_requests"]
 
 
 def init_db_indexes():
@@ -30,6 +31,7 @@ def init_db_indexes():
     try:
         users_collection.create_index("email", unique=True)
         employees_collection.create_index("email", unique=True)
+        account_requests_collection.create_index("email", unique=True)
         print("MongoDB indexes created successfully.")
     except Exception as e:
         print(f"[Warning] Could not create indexes: {e}")

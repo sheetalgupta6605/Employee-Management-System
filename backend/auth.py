@@ -99,6 +99,9 @@ def get_current_user(
             detail="User account not found",
         )
 
+    # Compare legacy role values consistently (for example, "Admin").
+    user["role"] = str(user.get("role", "")).strip().lower()
+
     return user
 
 

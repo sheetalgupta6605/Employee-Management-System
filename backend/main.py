@@ -1,6 +1,5 @@
 import base64
 import os
-import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -12,7 +11,14 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, Field
 from pymongo.errors import DuplicateKeyError
 
-from database import client, db, users_collection, employees_collection, init_db_indexes
+from database import (
+    client,
+    db,
+    users_collection,
+    employees_collection,
+    account_requests_collection,
+    init_db_indexes,
+)
 from auth import (
     hash_password,
     verify_password,
@@ -46,6 +52,7 @@ async def lifespan(app: FastAPI):
         client.admin.command("ping")
         print("MongoDB connected successfully!")
         init_db_indexes()
+        migrate_legacy_account_requests()
     except Exception as e:
         print(f"[Warning] Could not connect to MongoDB at startup: {e}")
         print("Server will still start. Check your MONGO_URL and your MongoDB Atlas IP whitelist.")
@@ -89,6 +96,7 @@ class EmployeeUpdate(BaseModel):
 class UserSignup(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: EmailStr
+    department: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -116,6 +124,48 @@ class ResumeUpload(BaseModel):
 def normalize_email(email: str) -> str:
     """Convert email to lowercase and remove spaces to avoid duplicates."""
     return email.strip().lower()
+
+
+def migrate_legacy_account_requests():
+    """Move old signup records out of the employee directory into the request queue."""
+    legacy_accounts = users_collection.find(
+        {
+            "role": "employee",
+            "status": "pending",
+            "created_profile": True,
+        }
+    )
+    for account in legacy_accounts:
+        email = normalize_email(str(account.get("email", "")))
+        if not email or not account.get("password"):
+            continue
+
+        employee_id = account.get("employee_id")
+        employee = None
+        if employee_id and ObjectId.is_valid(employee_id):
+            employee = employees_collection.find_one({"_id": ObjectId(employee_id)})
+        if employee is None:
+            employee = employees_collection.find_one({"email": email})
+
+        # Retain the existing hashed password so approval can activate login.
+        account_requests_collection.update_one(
+            {"email": email},
+            {
+                "$setOnInsert": {
+                    "name": employee.get("name", account.get("name", "Employee")) if employee else account.get("name", "Employee"),
+                    "email": email,
+                    "department": employee.get("department", "General") if employee else "General",
+                    "password_hash": account["password"],
+                    "created_at": account.get("created_at", datetime.now(timezone.utc)),
+                }
+            },
+            upsert=True,
+        )
+
+        # Remove only the employee profile created by the old signup flow.
+        if employee is not None:
+            employees_collection.delete_one({"_id": employee["_id"]})
+        users_collection.delete_one({"_id": account["_id"], "status": "pending"})
 
 
 def serialize_employee(employee: dict) -> dict:
@@ -171,6 +221,32 @@ def get_employee_by_id(employee_id: str) -> dict:
     return employee
 
 
+def employee_account_status(employee: dict) -> str:
+    account = users_collection.find_one(
+        {
+            "role": "employee",
+            "$or": [
+                {"employee_id": str(employee["_id"])},
+                {"email": normalize_email(str(employee["email"]))},
+            ]
+        },
+        {"status": 1},
+    )
+    if account is None:
+        pending_request = account_requests_collection.find_one(
+            {"email": normalize_email(str(employee["email"]))},
+            {"_id": 1},
+        )
+        if pending_request is not None:
+            return "pending"
+        legacy_request = users_collection.find_one(
+            {"email": normalize_email(str(employee["email"])), "status": "pending"},
+            {"_id": 1},
+        )
+        return "pending" if legacy_request is not None else "no_account"
+    return account.get("status", "approved")
+
+
 # ==================== HOME ====================
 
 @app.get("/")
@@ -193,38 +269,34 @@ def check_database():
 @app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
 def signup(user: UserSignup):
     """
-    An employee can create their own login account here.
-    Their email must already exist in the employees list (added by admin first).
+    Save an account request for admin review without creating an employee
+    profile or login account before the admin approves it.
     """
     email = normalize_email(str(user.email))
 
-    # Check the employee record exists
-    employee = employees_collection.find_one({"email": email})
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee record not found. Ask your admin to add you first.",
-        )
-
-    # Check they don't already have an account
     if users_collection.find_one({"email": email}):
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
+        raise HTTPException(status_code=409, detail="An account or request with this email already exists")
+    if account_requests_collection.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="An account request with this email is already pending")
 
-    new_user = {
+    request = {
         "name": user.name.strip(),
         "email": email,
-        "password": hash_password(user.password),  # Password is hashed, never stored as plain text
-        "role": "employee",
-        "employee_id": str(employee["_id"]),
+        "department": user.department.strip(),
+        "password_hash": hash_password(user.password),
         "created_at": datetime.now(timezone.utc),
     }
 
     try:
-        result = users_collection.insert_one(new_user)
+        result = account_requests_collection.insert_one(request)
     except DuplicateKeyError:
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
+        raise HTTPException(status_code=409, detail="An account request with this email is already pending")
 
-    return {"message": "Employee account created successfully", "user_id": str(result.inserted_id)}
+    return {
+        "message": "Your account request was sent to the administrator for approval.",
+        "status": "pending",
+        "request_id": str(result.inserted_id),
+    }
 
 
 # ==================== AUTH: LOGIN ====================
@@ -238,14 +310,35 @@ def login(user: UserLogin):
     email = normalize_email(str(user.email))
     account = users_collection.find_one({"email": email})
 
+    if account is None and account_requests_collection.find_one({"email": email}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account request is waiting for administrator approval.",
+        )
+
     # If account not found OR password doesn't match, return the same error
     # (We don't tell attackers whether the email or password was wrong)
     if not account or not account.get("password") or not verify_password(user.password, account["password"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
-    role = account.get("role")
+    role = str(account.get("role", "")).strip().lower()
     if role not in ("admin", "employee"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account has an invalid role")
+
+    # Keep older accounts with values like "Admin" or " Employee " usable,
+    # and gradually normalize their stored role when they sign in.
+    if account.get("role") != role:
+        users_collection.update_one(
+            {"_id": account["_id"]},
+            {"$set": {"role": role}},
+        )
+        account["role"] = role
+
+    if role == "employee" and account.get("status", "approved") != "approved":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account request is waiting for administrator approval.",
+        )
 
     token = create_access_token(account)
 
@@ -446,8 +539,8 @@ def create_employee(
     current_user: dict = Depends(require_admin),
 ):
     """
-    Admin creates a new employee record.
-    A login account is automatically created with a temporary password.
+    Admin creates an employee directory record. The employee can request
+    an account from the login page, and the admin can approve that request.
     """
     data = employee.model_dump()
     data["name"] = data["name"].strip()
@@ -459,48 +552,14 @@ def create_employee(
     if users_collection.find_one({"email": data["email"]}):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
 
-    # Generate a secure random temporary password
-    temporary_password = secrets.token_urlsafe(12)
-
-    employee_id = None
-    user_id = None
-
     try:
-        # Step 1: Insert the employee record
         employee_result = employees_collection.insert_one(data)
-        employee_id = employee_result.inserted_id
-
-        # Step 2: Create a login account linked to this employee
-        account = {
-            "name": data["name"],
-            "email": data["email"],
-            "password": hash_password(temporary_password),
-            "role": "employee",
-            "employee_id": str(employee_id),
-            "created_at": datetime.now(timezone.utc),
-        }
-        user_result = users_collection.insert_one(account)
-        user_id = user_result.inserted_id
-
     except DuplicateKeyError:
-        # Rollback: if account creation fails, remove the employee record too
-        if user_id:
-            users_collection.delete_one({"_id": user_id})
-        if employee_id:
-            employees_collection.delete_one({"_id": employee_id})
-        raise HTTPException(status_code=409, detail="An account or employee with this email already exists")
+        raise HTTPException(status_code=409, detail="An employee with this email already exists")
 
-    except Exception:
-        # Rollback on any other error
-        if user_id:
-            users_collection.delete_one({"_id": user_id})
-        if employee_id:
-            employees_collection.delete_one({"_id": employee_id})
-        raise
-
-    saved_employee = employees_collection.find_one({"_id": employee_id})
+    saved_employee = employees_collection.find_one({"_id": employee_result.inserted_id})
     response = serialize_employee(saved_employee)
-    response["temporary_password"] = temporary_password  # Admin needs to share this with the employee
+    response["account_status"] = "no_account"
 
     return response
 
@@ -510,7 +569,161 @@ def create_employee(
 @app.get("/employees")
 def get_all_employees(current_user: dict = Depends(require_admin)):
     """Admin can view the full list of all employees."""
-    return [serialize_employee(emp) for emp in employees_collection.find()]
+    results = []
+    for employee in employees_collection.find():
+        account_status = employee_account_status(employee)
+        serialized = serialize_employee(employee)
+        serialized["account_status"] = account_status
+        email = normalize_email(str(serialized["email"]))
+        pending_request = account_requests_collection.find_one(
+            {"email": email}, {"_id": 1}
+        )
+        if pending_request is None:
+            pending_request = users_collection.find_one(
+                {"email": email, "role": "employee", "status": "pending"},
+                {"_id": 1},
+            )
+        serialized["account_request_id"] = (
+            str(pending_request["_id"]) if pending_request else None
+        )
+        results.append(serialized)
+    return results
+
+
+@app.get("/admin/account-requests")
+def get_account_requests(current_user: dict = Depends(require_admin)):
+    requests = []
+    seen_emails = set()
+    for request in account_requests_collection.find().sort("created_at", ASCENDING):
+        email = request["email"]
+        seen_emails.add(email)
+        requests.append(
+            {
+                "id": str(request["_id"]),
+                "name": request.get("name", "Employee"),
+                "email": email,
+                "department": request.get("department", "General"),
+            }
+        )
+
+    # Keep pending requests created by the older signup flow reviewable.
+    for account in users_collection.find(
+        {"role": "employee", "status": "pending"}
+    ).sort("created_at", ASCENDING):
+        if account["email"] in seen_emails:
+            continue
+        employee_id = account.get("employee_id")
+        employee = None
+        if employee_id and ObjectId.is_valid(employee_id):
+            employee = employees_collection.find_one({"_id": ObjectId(employee_id)})
+        if employee is None:
+            employee = employees_collection.find_one({"email": account["email"]})
+        requests.append(
+            {
+                "id": str(account["_id"]),
+                "name": employee.get("name", account.get("name", "Employee")) if employee else account.get("name", "Employee"),
+                "email": account["email"],
+                "department": employee.get("department", "General") if employee else "General",
+            }
+        )
+    return requests
+
+
+@app.post("/admin/account-requests/{request_id}/approve")
+def approve_account_request(
+    request_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    if not ObjectId.is_valid(request_id):
+        raise HTTPException(status_code=400, detail="Invalid account request ID")
+
+    request = account_requests_collection.find_one({"_id": ObjectId(request_id)})
+    if request is not None:
+        email = request["email"]
+        if users_collection.find_one({"email": email}):
+            raise HTTPException(status_code=409, detail="An account with this email already exists")
+
+        employee = employees_collection.find_one({"email": email})
+        created_employee_id = None
+        if employee is None:
+            try:
+                result = employees_collection.insert_one(
+                    {
+                        "name": request["name"],
+                        "email": email,
+                        "department": request.get("department", "General"),
+                        "contact_number": "",
+                        "address": "",
+                    }
+                )
+                created_employee_id = result.inserted_id
+                employee = employees_collection.find_one({"_id": created_employee_id})
+            except DuplicateKeyError:
+                employee = employees_collection.find_one({"email": email})
+
+        try:
+            users_collection.insert_one(
+                {
+                    "name": employee.get("name", request["name"]),
+                    "email": email,
+                    "password": request["password_hash"],
+                    "role": "employee",
+                    "employee_id": str(employee["_id"]),
+                    "status": "approved",
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
+        except DuplicateKeyError as error:
+            if created_employee_id is not None:
+                employees_collection.delete_one({"_id": created_employee_id})
+            raise HTTPException(status_code=409, detail="An account with this email already exists") from error
+        except Exception:
+            if created_employee_id is not None:
+                employees_collection.delete_one({"_id": created_employee_id})
+            raise
+
+        account_requests_collection.delete_one({"_id": request["_id"]})
+        return {"message": f"Account request for {request['name']} was approved."}
+
+    # Review support for pending accounts created by the previous signup flow.
+    account = users_collection.find_one(
+        {"_id": ObjectId(request_id), "role": "employee", "status": "pending"}
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="Pending account request not found")
+
+    users_collection.update_one(
+        {"_id": account["_id"]},
+        {"$set": {"status": "approved"}, "$unset": {"created_profile": ""}},
+    )
+    return {"message": f"Account request for {account.get('name', account['email'])} was approved."}
+
+
+@app.post("/admin/account-requests/{request_id}/decline")
+def decline_account_request(
+    request_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    if not ObjectId.is_valid(request_id):
+        raise HTTPException(status_code=400, detail="Invalid account request ID")
+
+    request = account_requests_collection.find_one({"_id": ObjectId(request_id)})
+    if request is not None:
+        account_requests_collection.delete_one({"_id": request["_id"]})
+        return {"message": f"Account request for {request['name']} was declined."}
+
+    # Decline a pending account left by the previous signup flow.
+    account = users_collection.find_one(
+        {"_id": ObjectId(request_id), "role": "employee", "status": "pending"}
+    )
+    if account is None:
+        raise HTTPException(status_code=404, detail="Pending account request not found")
+
+    users_collection.delete_one({"_id": account["_id"], "status": "pending"})
+    employee_id = account.get("employee_id")
+    if account.get("created_profile") and employee_id and ObjectId.is_valid(employee_id):
+        employees_collection.delete_one({"_id": ObjectId(employee_id)})
+    return {"message": f"Account request for {account.get('name', account['email'])} was declined."}
 
 
 # ==================== ADMIN: VIEW ONE EMPLOYEE ====================
@@ -587,6 +800,9 @@ def delete_employee(employee_id: str, current_user: dict = Depends(require_admin
 
     # Delete the linked login account
     users_collection.delete_many({"employee_id": str(object_id)})
+    account_requests_collection.delete_many(
+        {"email": normalize_email(str(employee["email"]))}
+    )
 
     # Delete the employee record
     employees_collection.delete_one({"_id": object_id})
@@ -647,6 +863,7 @@ def set_employee_account_password(
                 "email": normalized_email,
                 "role": "employee",
                 "employee_id": str(object_id),
+                "status": "approved",
             }},
         )
     else:
@@ -657,7 +874,10 @@ def set_employee_account_password(
             "password": hashed_password,
             "role": "employee",
             "employee_id": str(object_id),
+            "status": "approved",
             "created_at": datetime.now(timezone.utc),
         })
+
+    account_requests_collection.delete_one({"email": normalized_email})
 
     return {"message": f"Password for {employee.get('name', 'employee')} has been updated successfully"}

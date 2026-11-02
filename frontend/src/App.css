@@ -720,6 +720,138 @@ a {
   gap: 1.25rem;
 }
 
+.account-notification-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.account-notification-trigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.account-notification-trigger:hover,
+.account-notification-trigger[aria-expanded="true"] {
+  color: var(--indigo-700);
+  background: var(--indigo-50);
+  border-color: var(--indigo-200);
+}
+
+.account-notification-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 4px;
+  color: #fff;
+  background: #e11d48;
+  border: 2px solid var(--surface-card);
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.account-notification-popover {
+  position: absolute;
+  z-index: 1000;
+  top: calc(100% + 12px);
+  right: 0;
+  width: min(370px, calc(100vw - 2rem));
+  max-height: min(460px, calc(100vh - 100px));
+  overflow-y: auto;
+  color: var(--text-main);
+  background: var(--surface-card);
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+}
+
+.account-notification-heading {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.1rem;
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.account-notification-heading > div,
+.account-notification-person {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.account-notification-heading strong {
+  font-size: 0.94rem;
+}
+
+.account-notification-heading span,
+.account-notification-person span,
+.account-notification-person small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.account-notification-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.account-notification-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem 1.1rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.account-notification-item:last-child {
+  border-bottom: 0;
+}
+
+.account-notification-person strong,
+.account-notification-person span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-notification-actions {
+  display: flex;
+  gap: 0.55rem;
+}
+
+.account-notification-actions .btn {
+  padding: 0.42rem 0.75rem;
+  font-size: 0.76rem;
+}
+
+.account-notification-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 1.25rem 1.1rem;
+  color: var(--text-muted);
+  font-size: 0.83rem;
+}
+
 .topbar-status-chip {
   display: inline-flex;
   align-items: center;

@@ -150,23 +150,6 @@ function AlertCircleIcon({ size = 18, className = "" }) {
   );
 }
 
-function CopyIcon({ size = 16, className = "" }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-    </svg>
-  );
-}
-
-function CheckIcon({ size = 16, className = "" }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
 function XIcon({ size = 18, className = "" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -192,6 +175,15 @@ function MailIcon({ size = 18, className = "" }) {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <rect width="20" height="16" x="2" y="4" rx="2" />
       <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </svg>
+  );
+}
+
+function BellIcon({ size = 18, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+      <path d="M10 21h4" />
     </svg>
   );
 }
@@ -306,14 +298,30 @@ function ToastNotification({ toast, onClose }) {
 // 4. MAIN APP CONTAINER (ROUTING & AUTH CHECK)
 // ==========================================================================
 
+function navigate(path, replace = false) {
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method]({}, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [toast, setToast] = useState(null);
+  const [pathname, setPathname] = useState(() => window.location.pathname);
 
   const showToast = (message, type = "info") => {
     setToast({ message, type });
   };
+
+  useEffect(() => {
+    function updatePathname() {
+      setPathname(window.location.pathname);
+    }
+
+    window.addEventListener("popstate", updatePathname);
+    return () => window.removeEventListener("popstate", updatePathname);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -344,14 +352,62 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (checkingAuth) return;
+
+    if (!user) {
+      if (pathname !== "/login") navigate("/login", true);
+      return;
+    }
+
+    if (!["admin", "employee"].includes(user.role)) {
+      clearToken();
+      setUser(null);
+      navigate("/login", true);
+      return;
+    }
+
+    if (pathname === "/login") {
+      clearToken();
+      setUser(null);
+      return;
+    }
+
+    const requestedRole = pathname.startsWith("/admin")
+      ? "admin"
+      : pathname.startsWith("/employee")
+        ? "employee"
+        : null;
+
+    if (requestedRole && requestedRole !== user.role) {
+      clearToken();
+      setUser(null);
+      navigate("/login", true);
+      return;
+    }
+
+    const homePath = user.role === "admin" ? "/admin/dashboard" : "/employee/dashboard";
+    const allowedPaths = user.role === "admin"
+      ? ["/admin", "/admin/dashboard", "/admin/employees"]
+      : ["/employee", "/employee/dashboard"];
+
+    if (!allowedPaths.includes(pathname)) {
+      navigate(homePath, true);
+    } else if (pathname === "/admin" || pathname === "/employee") {
+      navigate(homePath, true);
+    }
+  }, [checkingAuth, pathname, user]);
+
   function handleLogin(account) {
     setUser(account);
+    navigate(account.role === "admin" ? "/admin/dashboard" : "/employee/dashboard", true);
     showToast(`Welcome back, ${account.name || account.email}!`, "success");
   }
 
   function handleLogout() {
     clearToken();
     setUser(null);
+    navigate("/login", true);
     showToast("You have been signed out safely.", "info");
   }
 
@@ -401,9 +457,10 @@ export default function App() {
 // ==========================================================================
 
 function LoginPage({ onLogin }) {
-  const [mode, setMode] = useState("login");
+  const [requestingAccount, setRequestingAccount] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [department, setDepartment] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
@@ -432,36 +489,22 @@ function LoginPage({ onLogin }) {
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
-      if (mode === "signup") {
-        try {
-          await api("/auth/signup", {
-            method: "POST",
-            body: JSON.stringify({
-              name: name.trim(),
-              email: normalizedEmail,
-              password,
-            }),
-          });
-        } catch (signupError) {
-          if (signupError.status !== 409) {
-            throw signupError;
-          }
+      if (requestingAccount) {
+        const result = await api("/auth/signup", {
+          method: "POST",
+          body: JSON.stringify({
+            name: name.trim(),
+            email: normalizedEmail,
+            department: department.trim(),
+            password,
+          }),
+        });
 
-          const result = await api("/auth/login", {
-            method: "POST",
-            body: JSON.stringify({
-              email: normalizedEmail,
-              password,
-            }),
-          });
-          finishLogin(result, normalizedEmail);
-          return;
-        }
-
-        setMode("login");
+        setRequestingAccount(false);
         setName("");
+        setDepartment("");
         setPassword("");
-        setNotice("Your account is ready. Sign in with your email and password.");
+        setNotice(result.message);
         return;
       }
 
@@ -495,41 +538,12 @@ function LoginPage({ onLogin }) {
         </div>
 
         <div className="auth-header">
-          <h2>{mode === "login" ? "Welcome back" : "Create your account"}</h2>
+          <h2>{requestingAccount ? "Request an account" : "Welcome back"}</h2>
           <p className="subtext">
-            {mode === "login"
-              ? "Sign in with your work email and password."
-              : "Create an employee account using your registered work email."}
+            {requestingAccount
+              ? "Send an account request to your administrator for approval."
+              : "Sign in with your work email and password."}
           </p>
-        </div>
-
-        <div className="auth-mode-switch" aria-label="Account action">
-          <button
-            type="button"
-            className={mode === "login" ? "active" : ""}
-            aria-pressed={mode === "login"}
-            disabled={loading}
-            onClick={() => {
-              setMode("login");
-              setError("");
-              setNotice("");
-            }}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            className={mode === "signup" ? "active" : ""}
-            aria-pressed={mode === "signup"}
-            disabled={loading}
-            onClick={() => {
-              setMode("signup");
-              setError("");
-              setNotice("");
-            }}
-          >
-            Create account
-          </button>
         </div>
 
         {error && (
@@ -547,22 +561,38 @@ function LoginPage({ onLogin }) {
         )}
 
         <form onSubmit={handleSubmit}>
-          {mode === "signup" && (
-            <div className="form-group">
-              <label className="form-label" htmlFor="signup-name">Full name</label>
-              <input
-                id="signup-name"
-                name="name"
-                type="text"
-                className="input-field no-icon"
-                placeholder="Your name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                autoComplete="name"
-                maxLength={100}
-                required
-              />
-            </div>
+          {requestingAccount && (
+            <>
+              <div className="form-group">
+                <label className="form-label" htmlFor="signup-name">Full name</label>
+                <input
+                  id="signup-name"
+                  name="name"
+                  type="text"
+                  className="input-field no-icon"
+                  placeholder="Your name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  autoComplete="name"
+                  maxLength={100}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label" htmlFor="signup-department">Department</label>
+                <input
+                  id="signup-department"
+                  name="department"
+                  type="text"
+                  className="input-field no-icon"
+                  placeholder="e.g. Engineering"
+                  value={department}
+                  onChange={(event) => setDepartment(event.target.value)}
+                  maxLength={100}
+                  required
+                />
+              </div>
+            </>
           )}
 
           <div className="form-group">
@@ -584,7 +614,9 @@ function LoginPage({ onLogin }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label" htmlFor="auth-password">Password</label>
+            <label className="form-label" htmlFor="auth-password">
+              {requestingAccount ? "Create password" : "Password"}
+            </label>
             <div className="input-container">
               <KeyIcon size={18} className="input-icon-left" />
               <input
@@ -592,11 +624,11 @@ function LoginPage({ onLogin }) {
                 name="password"
                 type={showPassword ? "text" : "password"}
                 className="input-field"
-                placeholder={mode === "signup" ? "At least 8 characters" : "Enter your password"}
+                placeholder={requestingAccount ? "At least 8 characters" : "Enter your password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                minLength={mode === "signup" ? 8 : undefined}
+                autoComplete={requestingAccount ? "new-password" : "current-password"}
+                minLength={requestingAccount ? 8 : undefined}
                 maxLength={128}
                 required
               />
@@ -619,20 +651,35 @@ function LoginPage({ onLogin }) {
             {loading ? (
               <>
                 <RefreshCwIcon size={16} className="animate-spin" />
-                <span>{mode === "login" ? "Signing in..." : "Creating account..."}</span>
+                <span>{requestingAccount ? "Submitting request..." : "Signing in..."}</span>
               </>
             ) : (
-              <span>{mode === "login" ? "Sign in" : "Create account"}</span>
+              <span>{requestingAccount ? "Submit account request" : "Sign in"}</span>
             )}
           </button>
         </form>
 
+        <div style={{ marginTop: "1rem", textAlign: "center" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={loading}
+            onClick={() => {
+              setRequestingAccount((requesting) => !requesting);
+              setError("");
+              setNotice("");
+            }}
+          >
+            {requestingAccount ? "Back to sign in" : "Request account"}
+          </button>
+        </div>
+
         <div className="auth-hint-box auth-single-hint">
           <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
           <span>
-            {mode === "login"
-              ? "Your account type is detected automatically when you sign in."
-              : "Employee sign-up is available after an administrator adds your employee record. Admin accounts are created by system administrators."}
+            {requestingAccount
+              ? "An administrator will review your details. You can sign in after your account request is approved."
+              : "Your account type is detected automatically when you sign in."}
           </span>
         </div>
       </section>
@@ -646,17 +693,20 @@ function LoginPage({ onLogin }) {
 
 function AdminDashboard({ user, onLogout, showToast }) {
   const [employees, setEmployees] = useState([]);
+  const [pendingRequests, setPendingRequests] = useState([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState("checking");
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("dashboard"); // 'dashboard' | 'employees'
+  const [activeTab, setActiveTab] = useState(() =>
+    window.location.pathname === "/admin/employees" ? "employees" : "dashboard",
+  ); // 'dashboard' | 'employees'
 
   // Modals state
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
-  const [tempPasswordModal, setTempPasswordModal] = useState(null); // { name, email, password }
   const [resetPasswordModal, setResetPasswordModal] = useState(null); // employee object
   const [deleteModal, setDeleteModal] = useState(null); // employee object
 
@@ -675,8 +725,62 @@ function AdminDashboard({ user, onLogout, showToast }) {
     }
   }
 
+  async function loadAccountRequests() {
+    try {
+      const data = await api("/admin/account-requests");
+      setPendingRequests(Array.isArray(data) ? data : []);
+    } catch {
+      setPendingRequests([]);
+    }
+  }
+
+  async function approveAccount(employee) {
+    try {
+      const requestId = employee.account_request_id || getEmployeeId(employee);
+      const result = await api(`/admin/account-requests/${requestId}/approve`, {
+        method: "POST",
+      });
+      showToast(result.message || "Employee account approved.", "success");
+      await Promise.all([loadEmployees(), loadAccountRequests()]);
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  }
+
+  async function declineAccount(employee) {
+    try {
+      const requestId = employee.account_request_id || getEmployeeId(employee);
+      const result = await api(`/admin/account-requests/${requestId}/decline`, {
+        method: "POST",
+      });
+      showToast(result.message || "Account request declined.", "info");
+      await Promise.all([loadEmployees(), loadAccountRequests()]);
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  }
+
+  useEffect(() => {
+    function syncTabFromPath() {
+      setActiveTab(
+        window.location.pathname === "/admin/employees" ? "employees" : "dashboard",
+      );
+    }
+
+    window.addEventListener("popstate", syncTabFromPath);
+    return () => window.removeEventListener("popstate", syncTabFromPath);
+  }, []);
+
+  function navigateToTab(tab) {
+    setActiveTab(tab);
+    navigate(tab === "employees" ? "/admin/employees" : "/admin/dashboard");
+  }
+
   useEffect(() => {
     loadEmployees();
+    loadAccountRequests();
+    const refreshTimer = window.setInterval(loadAccountRequests, 10000);
+    return () => window.clearInterval(refreshTimer);
   }, []);
 
   const departments = useMemo(() => {
@@ -755,7 +859,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
             <button
               className={`sidebar-nav-link ${activeTab === "dashboard" ? "active" : ""}`}
               onClick={() => {
-                setActiveTab("dashboard");
+                navigateToTab("dashboard");
                 setSidebarOpen(false);
               }}
             >
@@ -768,7 +872,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
             <button
               className={`sidebar-nav-link ${activeTab === "employees" ? "active" : ""}`}
               onClick={() => {
-                setActiveTab("employees");
+                navigateToTab("employees");
                 setSidebarOpen(false);
               }}
             >
@@ -831,6 +935,77 @@ function AdminDashboard({ user, onLogout, showToast }) {
           </div>
 
           <div className="topbar-right">
+            <div className="account-notification-wrap">
+              <button
+                className="account-notification-trigger"
+                type="button"
+                aria-label={`Account requests: ${pendingRequests.length} pending`}
+                aria-expanded={notificationsOpen}
+                onClick={() => setNotificationsOpen((open) => !open)}
+              >
+                <BellIcon size={19} />
+                {pendingRequests.length > 0 && (
+                  <span className="account-notification-count">
+                    {pendingRequests.length > 9 ? "9+" : pendingRequests.length}
+                  </span>
+                )}
+              </button>
+
+              {notificationsOpen && (
+                <section className="account-notification-popover" aria-label="Pending account requests">
+                  <div className="account-notification-heading">
+                    <div>
+                      <strong>Account requests</strong>
+                      <span>{pendingRequests.length} waiting for review</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      onClick={() => setNotificationsOpen(false)}
+                      aria-label="Close account requests"
+                    >
+                      <XIcon size={16} />
+                    </button>
+                  </div>
+
+                  {pendingRequests.length === 0 ? (
+                    <div className="account-notification-empty">
+                      <CheckCircleIcon size={20} />
+                      <span>No pending account requests.</span>
+                    </div>
+                  ) : (
+                    <div className="account-notification-list">
+                      {pendingRequests.map((request) => (
+                        <article className="account-notification-item" key={request.id}>
+                          <div className="account-notification-person">
+                            <strong>{request.name}</strong>
+                            <span>{request.email}</span>
+                            <small>{request.department || "General"}</small>
+                          </div>
+                          <div className="account-notification-actions">
+                            <button
+                              className="btn btn-primary"
+                              type="button"
+                              onClick={() => approveAccount(request)}
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              className="btn btn-danger"
+                              type="button"
+                              onClick={() => declineAccount(request)}
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+            </div>
+
             <div className={`topbar-status-chip ${connectionStatus}`}>
               <span className="status-dot"></span>
               <span>
@@ -1059,7 +1234,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                         justifyContent: "flex-start",
                         gap: "0.75rem",
                       }}
-                      onClick={() => setActiveTab("employees")}
+                      onClick={() => navigateToTab("employees")}
                     >
                       <UsersIcon size={18} />
                       <span>Open Full Employee Records ({employees.length})</span>
@@ -1101,7 +1276,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                     <h2>Recent Employee Records</h2>
                     <p>Latest personnel registered in the database</p>
                   </div>
-                  <button className="btn btn-secondary" onClick={() => setActiveTab("employees")}>
+                  <button className="btn btn-secondary" onClick={() => navigateToTab("employees")}>
                     <span>Manage All Records &rarr;</span>
                   </button>
                 </div>
@@ -1120,6 +1295,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                           <th>Contact</th>
                           <th>Address</th>
                           <th>Resume</th>
+                          <th>Account</th>
                           <th style={{ textAlign: "right" }}>Actions</th>
                         </tr>
                       </thead>
@@ -1190,10 +1366,30 @@ function AdminDashboard({ user, onLogout, showToast }) {
                                 </td>
 
                                 <td>
+                                  <span className={`badge ${emp.account_status === "pending" ? "badge-amber" : emp.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
+                                    {emp.account_status === "pending"
+                                      ? "Pending approval"
+                                      : emp.account_status === "approved"
+                                        ? "Approved"
+                                        : "No account"}
+                                  </span>
+                                </td>
+
+                                <td>
                                   <div
                                     className="table-actions-cell"
                                     style={{ justifyContent: "flex-end" }}
                                   >
+                                    {emp.account_status === "pending" && (
+                                      <button
+                                        className="action-btn edit"
+                                        onClick={() => approveAccount(emp)}
+                                        title="Approve this account request"
+                                      >
+                                        <CheckCircleIcon size={14} />
+                                        <span>Approve</span>
+                                      </button>
+                                    )}
                                     <button
                                       className="action-btn edit"
                                       onClick={() => handleOpenEdit(emp)}
@@ -1336,6 +1532,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                         <th>Contact Number</th>
                         <th>Address</th>
                         <th>Resume</th>
+                        <th>Account</th>
                         <th style={{ textAlign: "right" }}>Actions</th>
                       </tr>
                     </thead>
@@ -1407,10 +1604,30 @@ function AdminDashboard({ user, onLogout, showToast }) {
                             </td>
 
                             <td>
+                              <span className={`badge ${emp.account_status === "pending" ? "badge-amber" : emp.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
+                                {emp.account_status === "pending"
+                                  ? "Pending approval"
+                                  : emp.account_status === "approved"
+                                    ? "Approved"
+                                    : "No account"}
+                              </span>
+                            </td>
+
+                            <td>
                               <div
                                 className="table-actions-cell"
                                 style={{ justifyContent: "flex-end" }}
                               >
+                                {emp.account_status === "pending" && (
+                                  <button
+                                    className="action-btn edit"
+                                    onClick={() => approveAccount(emp)}
+                                    title="Approve this account request"
+                                  >
+                                    <CheckCircleIcon size={14} />
+                                    <span>Approve</span>
+                                  </button>
+                                )}
                                 <button
                                   className="action-btn edit"
                                   onClick={() => handleOpenEdit(emp)}
@@ -1458,34 +1675,15 @@ function AdminDashboard({ user, onLogout, showToast }) {
         <EmployeeFormModal
           employee={editingEmployee}
           onClose={() => setFormModalOpen(false)}
-          onSuccess={(result, isEdit) => {
+          onSuccess={(_, isEdit) => {
             setFormModalOpen(false);
             loadEmployees();
             if (isEdit) {
               showToast("Employee details updated successfully.", "success");
             } else {
               showToast("Employee record created successfully!", "success");
-              // Open temporary password dialog for newly created employee
-              if (result?.temporary_password) {
-                setTempPasswordModal({
-                  name: result.name,
-                  email: result.email,
-                  password: result.temporary_password,
-                });
-              }
             }
           }}
-          showToast={showToast}
-        />
-      )}
-
-      {/* ====================================================================
-          MODAL: TEMPORARY PASSWORD CREDENTIALS DIALOG (CRITICAL REQUIREMENT)
-          ==================================================================== */}
-      {tempPasswordModal && (
-        <TemporaryPasswordModal
-          data={tempPasswordModal}
-          onClose={() => setTempPasswordModal(null)}
           showToast={showToast}
         />
       )}
@@ -1591,7 +1789,7 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
             <p className="subtext">
               {isEdit
                 ? "Update organizational details for this employee."
-                : "Creates employee record and automatically generates temporary login credentials."}
+                : "Add the employee to the directory. They can request account access after their record is added."}
             </p>
           </div>
           <button className="btn-icon" onClick={onClose} aria-label="Close modal">
@@ -1753,75 +1951,6 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================================================
-// 8. TEMPORARY PASSWORD MODAL (CRITICAL ENTERPRISE FEATURE)
-// ==========================================================================
-
-function TemporaryPasswordModal({ data, onClose, showToast }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    if (!data?.password) return;
-    navigator.clipboard.writeText(data.password);
-    setCopied(true);
-    showToast("Temporary password copied to clipboard!", "success");
-    setTimeout(() => setCopied(false), 2500);
-  }
-
-  return (
-    <div className="modal-backdrop">
-      <div className="modal-card" style={{ maxWidth: 480 }}>
-        <div className="modal-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "0.65rem" }}>
-            <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#ecfdf5", color: "#059669", display: "grid", placeItems: "center" }}>
-              <CheckCircleIcon size={20} />
-            </div>
-            <div>
-              <h3>Employee Account Provisioned</h3>
-              <p className="subtext">Share these credentials with the new employee</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="modal-body">
-          <p style={{ fontSize: "0.875rem", color: "#475569", lineHeight: 1.6, marginBottom: "1rem" }}>
-            A user account for <strong>{data.name}</strong> (<code>{data.email}</code>) has been generated with role <strong>Employee</strong>.
-          </p>
-
-          <div className="credential-box">
-            <div className="credential-field-label">One-Time Temporary Password</div>
-            <div className="credential-value-display">
-              <span>{data.password}</span>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ padding: "0.4rem 0.75rem", fontSize: "0.8rem", background: copied ? "#059669" : "#4f46e5" }}
-                onClick={handleCopy}
-              >
-                {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-                <span>{copied ? "Copied!" : "Copy"}</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="auth-hint-box" style={{ marginTop: "1rem" }}>
-            <AlertCircleIcon size={18} style={{ color: "#d97706", flexShrink: 0 }} />
-            <span>
-              <strong>Important:</strong> For security reasons, this plaintext password will not be displayed again. The employee can use it to sign in through the shared portal.
-            </span>
-          </div>
-        </div>
-
-        <div className="modal-footer">
-          <button type="button" className="btn btn-primary" onClick={onClose} style={{ width: "100%" }}>
-            I have securely saved/shared this password
-          </button>
-        </div>
       </div>
     </div>
   );
