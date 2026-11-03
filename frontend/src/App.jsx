@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { api, clearToken, saveToken, downloadFile } from "./api";
 import "./App.css";
 
@@ -234,6 +234,12 @@ const emptyEmployee = {
 };
 
 const getEmployeeId = (employee) => employee?.id || employee?._id;
+const compareEmployeeIds = (first, second) =>
+  String(first.employee_id || "").localeCompare(
+    String(second.employee_id || ""),
+    undefined,
+    { numeric: true },
+  );
 
 function getErrorMessage(error) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -262,6 +268,116 @@ function getAvatarColor(name = "") {
   }
   const index = Math.abs(hash) % colors.length;
   return colors[index];
+}
+
+function ProfilePhotoControl({
+  image,
+  initials,
+  uploading,
+  onUpload,
+  onRemove,
+  large = false,
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const inputRef = useRef(null);
+  const controlRef = useRef(null);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    function dismissMenu(event) {
+      if (!controlRef.current?.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function dismissOnEscape(event) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", dismissMenu);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissMenu);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [menuOpen]);
+
+  return (
+    <div className="photo-upload-control" ref={controlRef}>
+      <button
+        type="button"
+        className="photo-upload-avatar"
+        title="Manage profile photo"
+        aria-label="Manage profile photo"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <span
+          className={large ? "employee-big-avatar" : "avatar-chip"}
+          style={{
+            ...(large
+              ? { overflow: "hidden", padding: 0 }
+              : { background: "#e0e7ff", color: "#4338ca", width: 34, height: 34 }),
+          }}
+        >
+          {image ? (
+            <img
+              src={image}
+              alt=""
+              style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }}
+            />
+          ) : (
+            initials
+          )}
+          {uploading && <span className="photo-upload-indicator">...</span>}
+        </span>
+      </button>
+      {menuOpen && (
+        <div className="photo-upload-menu" role="group" aria-label="Profile photo options">
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen(false);
+              inputRef.current?.click();
+            }}
+            disabled={uploading}
+          >
+            <UploadCloudIcon size={15} />
+            <span>{image ? "Change image" : "Add image"}</span>
+          </button>
+          {image && (
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false);
+                onRemove();
+              }}
+              disabled={uploading}
+            >
+              <TrashIcon size={15} />
+              <span>Remove image</span>
+            </button>
+          )}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="photo-upload-input"
+        onChange={(event) => {
+          setMenuOpen(false);
+          onUpload(event);
+        }}
+        disabled={uploading}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+    </div>
+  );
 }
 
 // ==========================================================================
@@ -304,6 +420,10 @@ function navigate(path, replace = false) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
+function getInvitationToken(pathname) {
+  return pathname.match(/^\/accept-invite\/([A-Za-z0-9_-]+)$/)?.[1] || null;
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -324,9 +444,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    function handleExpiredAuth() {
+      setUser(null);
+      setToast({ message: "Your session expired. Please sign in again.", type: "info" });
+      if (!getInvitationToken(window.location.pathname)) {
+        navigate("/login", true);
+      }
+    }
+
+    window.addEventListener("employee-app:auth-expired", handleExpiredAuth);
+    return () => window.removeEventListener("employee-app:auth-expired", handleExpiredAuth);
+  }, []);
+
+  useEffect(() => {
     let active = true;
 
     async function checkLogin() {
+      if (window.location.pathname === "/login" || getInvitationToken(window.location.pathname)) {
+        if (active) setCheckingAuth(false);
+        return;
+      }
+
       const token = localStorage.getItem("employee_app_token");
 
       if (!token) {
@@ -354,6 +492,8 @@ export default function App() {
 
   useEffect(() => {
     if (checkingAuth) return;
+
+    if (getInvitationToken(pathname)) return;
 
     if (!user) {
       if (pathname !== "/login") navigate("/login", true);
@@ -387,11 +527,12 @@ export default function App() {
     }
 
     const homePath = user.role === "admin" ? "/admin/dashboard" : "/employee/dashboard";
+    const isAdminEmployeeDetailPath = /^\/admin\/employees\/[^/]+$/.test(pathname);
     const allowedPaths = user.role === "admin"
-      ? ["/admin", "/admin/dashboard", "/admin/employees"]
+      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests"]
       : ["/employee", "/employee/dashboard"];
 
-    if (!allowedPaths.includes(pathname)) {
+    if (!allowedPaths.includes(pathname) && !(user.role === "admin" && isAdminEmployeeDetailPath)) {
       navigate(homePath, true);
     } else if (pathname === "/admin" || pathname === "/employee") {
       navigate(homePath, true);
@@ -424,12 +565,33 @@ export default function App() {
     );
   }
 
+  const invitationToken = getInvitationToken(pathname);
+
   return (
     <>
-      {!user ? (
+      {invitationToken ? (
+        <AcceptEmployeeInvite
+          token={invitationToken}
+          onLogin={handleLogin}
+        />
+      ) : pathname === "/login" || !user ? (
         <LoginPage onLogin={handleLogin} />
       ) : user.role === "admin" ? (
-        <AdminDashboard user={user} onLogout={handleLogout} showToast={showToast} />
+        <AdminDashboard
+          user={user}
+          pathname={pathname}
+          onUserUpdate={setUser}
+          onLogout={handleLogout}
+          showToast={showToast}
+        />
+      ) : user.role === "employee" && user.must_change_password ? (
+        <TemporaryPasswordChange
+          onComplete={() =>
+            setUser((current) => ({ ...current, must_change_password: false }))
+          }
+          onLogout={handleLogout}
+          showToast={showToast}
+        />
       ) : user.role === "employee" ? (
         <EmployeeDashboard user={user} onLogout={handleLogout} showToast={showToast} />
       ) : (
@@ -449,6 +611,106 @@ export default function App() {
 
       <ToastNotification toast={toast} onClose={() => setToast(null)} />
     </>
+  );
+}
+
+function TemporaryPasswordChange({ onComplete, onLogout, showToast }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (newPassword.length < 8) {
+      showToast("New password must be at least 8 characters.", "error");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast("New password and confirmation do not match.", "error");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await api("/employees/me/password", {
+        method: "PUT",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+      showToast("Password changed. Your account is ready.", "success");
+      onComplete();
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="auth-single-wrapper">
+      <section className="auth-single-card">
+        <div className="auth-header">
+          <h2>Set a new password</h2>
+          <p className="subtext">
+            Your administrator provided a temporary password. Change it to continue.
+          </p>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="temporary-current-password">Temporary password</label>
+            <input
+              id="temporary-current-password"
+              type="password"
+              className="input-field no-icon"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="temporary-new-password">New password</label>
+            <input
+              id="temporary-new-password"
+              type="password"
+              className="input-field no-icon"
+              autoComplete="new-password"
+              minLength={8}
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="temporary-confirm-password">Confirm new password</label>
+            <input
+              id="temporary-confirm-password"
+              type="password"
+              className="input-field no-icon"
+              autoComplete="new-password"
+              minLength={8}
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              required
+            />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={saving}>
+            {saving ? "Updating password..." : "Change password"}
+          </button>
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={onLogout}
+            style={{ marginLeft: "0.5rem" }}
+          >
+            Sign out
+          </button>
+        </form>
+      </section>
+    </main>
   );
 }
 
@@ -477,6 +739,8 @@ function LoginPage({ onLogin }) {
       name: result.name || "",
       email: result.email || fallbackEmail,
       role: result.role,
+      profile_image: result.profile_image || "",
+      must_change_password: Boolean(result.must_change_password),
     });
   }
 
@@ -687,13 +951,224 @@ function LoginPage({ onLogin }) {
   );
 }
 
+function AcceptEmployeeInvite({ token, onLogin }) {
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    department: "",
+    contact_number: "",
+    address: "",
+  });
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    api(`/employee-invites/${encodeURIComponent(token)}`)
+      .then((invite) => {
+        if (active) setForm(invite);
+      })
+      .catch((err) => {
+        if (active) setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  function handleChange(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError("");
+
+    if (password !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await api(`/employee-invites/${encodeURIComponent(token)}`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.name.trim(),
+          department: form.department.trim(),
+          contact_number: form.contact_number.trim(),
+          address: form.address.trim(),
+          password,
+        }),
+      });
+      if (!result.access_token || result.role !== "employee") {
+        throw new Error("The server returned an invalid account response. Please try again.");
+      }
+      saveToken(result.access_token);
+      onLogin({
+        name: result.name || "",
+        email: result.email || form.email,
+        role: result.role,
+        profile_image: result.profile_image || "",
+        must_change_password: Boolean(result.must_change_password),
+      });
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <main className="auth-single-wrapper">
+      <section className="auth-single-card">
+        <div className="auth-single-brand">
+          <div className="brand-icon-box"><UsersIcon size={24} /></div>
+          <div>
+            <div className="auth-single-brand-title">Employee Management</div>
+            <div className="auth-single-brand-caption">Complete your employee account</div>
+          </div>
+        </div>
+
+        <div className="auth-header">
+          <h2>Accept your invitation</h2>
+          <p className="subtext">Review your details and choose a password to create your account.</p>
+        </div>
+
+        {error && (
+          <div className="auth-form-message error" role="alert">
+            <AlertCircleIcon size={18} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {loading ? (
+          <p className="subtext" role="status">Checking your invitation...</p>
+        ) : !error || form.email ? (
+          <form onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-name">Full Name *</label>
+              <input
+                id="invite-name"
+                name="name"
+                type="text"
+                className="input-field no-icon"
+                placeholder="e.g. Sarah Jenkins"
+                value={form.name}
+                onChange={handleChange}
+                maxLength={100}
+                autoComplete="name"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-email">Work Email *</label>
+              <input
+                id="invite-email"
+                type="email"
+                className="input-field no-icon"
+                value={form.email}
+                readOnly
+                autoComplete="email"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-department">Department *</label>
+              <input
+                id="invite-department"
+                name="department"
+                type="text"
+                className="input-field no-icon"
+                placeholder="e.g. Engineering, Human Resources, Finance"
+                value={form.department}
+                onChange={handleChange}
+                maxLength={100}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-contact">Contact number</label>
+              <input
+                id="invite-contact"
+                name="contact_number"
+                type="tel"
+                className="input-field no-icon"
+                placeholder="e.g. +1 (555) 234-5678"
+                value={form.contact_number}
+                onChange={handleChange}
+                maxLength={50}
+                autoComplete="tel"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-address">Address / location</label>
+              <textarea
+                id="invite-address"
+                name="address"
+                rows={2}
+                className="input-field no-icon"
+                placeholder="e.g. 742 Evergreen Terrace, Springfield"
+                value={form.address}
+                onChange={handleChange}
+                maxLength={500}
+                autoComplete="street-address"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-password">Create password</label>
+              <input
+                id="invite-password"
+                type="password"
+                className="input-field no-icon"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite-confirm-password">Confirm password</label>
+              <input
+                id="invite-confirm-password"
+                type="password"
+                className="input-field no-icon"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+                required
+              />
+            </div>
+            <button type="submit" className="btn btn-primary auth-submit-button" disabled={saving}>
+              {saving ? "Creating account..." : "Create account"}
+            </button>
+          </form>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
 // ==========================================================================
 // 6. ADMIN DASHBOARD & EMPLOYEE MANAGEMENT
 // ==========================================================================
 
-function AdminDashboard({ user, onLogout, showToast }) {
+function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
   const [employees, setEmployees] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
+  const [requestLoadStatus, setRequestLoadStatus] = useState("loading");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState("checking");
@@ -701,14 +1176,21 @@ function AdminDashboard({ user, onLogout, showToast }) {
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState(() =>
-    window.location.pathname === "/admin/employees" ? "employees" : "dashboard",
-  ); // 'dashboard' | 'employees'
+    window.location.pathname.startsWith("/admin/employees")
+      ? "employees"
+      : window.location.pathname === "/admin/requests"
+        ? "requests"
+        : "dashboard",
+  );
+  const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
 
   // Modals state
   const [formModalOpen, setFormModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [resetPasswordModal, setResetPasswordModal] = useState(null); // employee object
   const [deleteModal, setDeleteModal] = useState(null); // employee object
+  const [accessModal, setAccessModal] = useState(null);
+  const [reviewRequest, setReviewRequest] = useState(null);
 
   async function loadEmployees() {
     setLoading(true);
@@ -725,12 +1207,63 @@ function AdminDashboard({ user, onLogout, showToast }) {
     }
   }
 
+  async function handleProfilePhotoUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      showToast("Choose a PNG, JPEG, or WebP image.", "error");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showToast("Profile image must be smaller than 2MB.", "error");
+      event.target.value = "";
+      return;
+    }
+
+    setUploadingProfilePhoto(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const result = await api("/auth/me/photo", {
+          method: "PUT",
+          body: JSON.stringify({ file_data: reader.result }),
+        });
+        onUserUpdate((current) => ({ ...current, profile_image: result.profile_image }));
+        showToast("Profile photo updated.", "success");
+      } catch (err) {
+        showToast(getErrorMessage(err), "error");
+      } finally {
+        setUploadingProfilePhoto(false);
+        event.target.value = "";
+      }
+    };
+    reader.onerror = () => {
+      showToast("Could not read the selected image.", "error");
+      setUploadingProfilePhoto(false);
+      event.target.value = "";
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function handleRemoveProfilePhoto() {
+    try {
+      await api("/auth/me/photo", { method: "DELETE" });
+      onUserUpdate((current) => ({ ...current, profile_image: "" }));
+      showToast("Profile photo removed.", "success");
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  }
+
   async function loadAccountRequests() {
     try {
       const data = await api("/admin/account-requests");
       setPendingRequests(Array.isArray(data) ? data : []);
+      setRequestLoadStatus("loaded");
     } catch {
-      setPendingRequests([]);
+      setRequestLoadStatus("error");
     }
   }
 
@@ -741,6 +1274,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
         method: "POST",
       });
       showToast(result.message || "Employee account approved.", "success");
+      setReviewRequest(null);
       await Promise.all([loadEmployees(), loadAccountRequests()]);
     } catch (err) {
       showToast(getErrorMessage(err), "error");
@@ -754,6 +1288,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
         method: "POST",
       });
       showToast(result.message || "Account request declined.", "info");
+      setReviewRequest(null);
       await Promise.all([loadEmployees(), loadAccountRequests()]);
     } catch (err) {
       showToast(getErrorMessage(err), "error");
@@ -763,7 +1298,11 @@ function AdminDashboard({ user, onLogout, showToast }) {
   useEffect(() => {
     function syncTabFromPath() {
       setActiveTab(
-        window.location.pathname === "/admin/employees" ? "employees" : "dashboard",
+        window.location.pathname.startsWith("/admin/employees")
+          ? "employees"
+          : window.location.pathname === "/admin/requests"
+            ? "requests"
+            : "dashboard",
       );
     }
 
@@ -771,9 +1310,56 @@ function AdminDashboard({ user, onLogout, showToast }) {
     return () => window.removeEventListener("popstate", syncTabFromPath);
   }, []);
 
+  useEffect(() => {
+    const detailRoute = pathname.match(/^\/admin\/employees\/([^/]+)$/);
+    if (!detailRoute) {
+      setFormModalOpen(false);
+      return;
+    }
+
+    if (loading) return;
+    if (connectionStatus !== "connected") {
+      navigate("/admin/employees", true);
+      return;
+    }
+
+    let requestedId;
+    try {
+      requestedId = decodeURIComponent(detailRoute[1]).toUpperCase();
+    } catch {
+      showToast("Invalid employee ID.", "error");
+      navigate("/admin/employees", true);
+      return;
+    }
+    const employee = employees.find(
+      (item) =>
+        item.employee_id?.toUpperCase() === requestedId ||
+        getEmployeeId(item)?.toUpperCase() === requestedId,
+    );
+
+    if (!employee) {
+      showToast(`No employee found with ID ${requestedId}.`, "error");
+      navigate("/admin/employees", true);
+      return;
+    }
+
+    setEditingEmployee(employee);
+    setFormModalOpen(true);
+  }, [pathname, employees, loading, connectionStatus, showToast]);
+
   function navigateToTab(tab) {
     setActiveTab(tab);
-    navigate(tab === "employees" ? "/admin/employees" : "/admin/dashboard");
+    const targetPath = {
+      employees: "/admin/employees",
+      requests: "/admin/requests",
+      dashboard: "/admin/dashboard",
+    }[tab];
+    navigate(targetPath);
+  }
+
+  function openRequestReview(request) {
+    setReviewRequest(request);
+    setNotificationsOpen(false);
   }
 
   useEffect(() => {
@@ -791,13 +1377,14 @@ function AdminDashboard({ user, onLogout, showToast }) {
     return employees.filter((emp) => {
       const term = search.toLowerCase();
       const matchesSearch =
+        (emp.employee_id || "").toLowerCase().includes(term) ||
         (emp.name || "").toLowerCase().includes(term) ||
         (emp.email || "").toLowerCase().includes(term) ||
         (emp.department || "").toLowerCase().includes(term);
 
       const matchesDept = departmentFilter === "all" || emp.department === departmentFilter;
       return matchesSearch && matchesDept;
-    });
+    }).sort(compareEmployeeIds);
   }, [employees, search, departmentFilter]);
 
   // Open Form for Adding New
@@ -810,6 +1397,27 @@ function AdminDashboard({ user, onLogout, showToast }) {
   function handleOpenEdit(emp) {
     setEditingEmployee(emp);
     setFormModalOpen(true);
+  }
+
+  function handleAccessStatusChange(employee, result) {
+    const employeeId = getEmployeeId(employee);
+    const updatedEmployee = {
+      ...employee,
+      account_status: result.account_status,
+      deactivated_until: result.deactivated_until,
+    };
+    setEmployees((current) =>
+      current.map((item) =>
+        getEmployeeId(item) === employeeId ? updatedEmployee : item,
+      ),
+    );
+    setEditingEmployee((current) =>
+      current && getEmployeeId(current) === employeeId
+        ? updatedEmployee
+        : current,
+    );
+    setAccessModal(null);
+    showToast(result.message, "success");
   }
 
   async function handleViewEmployeeResume(employeeId) {
@@ -882,6 +1490,20 @@ function AdminDashboard({ user, onLogout, showToast }) {
               </div>
               <span className="sidebar-pill">{employees.length}</span>
             </button>
+
+            <button
+              className={`sidebar-nav-link ${activeTab === "requests" ? "active" : ""}`}
+              onClick={() => {
+                navigateToTab("requests");
+                setSidebarOpen(false);
+              }}
+            >
+              <div className="sidebar-nav-item-left">
+                <BellIcon size={18} />
+                <span>Account Requests</span>
+              </div>
+              <span className="sidebar-pill">{pendingRequests.length}</span>
+            </button>
           </div>
         </div>
 
@@ -893,7 +1515,15 @@ function AdminDashboard({ user, onLogout, showToast }) {
                 className="avatar-chip"
                 style={{ background: "#4f46e5", color: "#fff", width: 34, height: 34 }}
               >
-                {getInitials(user.name || user.email)}
+                {user.profile_image ? (
+                  <img
+                    src={user.profile_image}
+                    alt=""
+                    style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }}
+                  />
+                ) : (
+                  getInitials(user.name || user.email)
+                )}
               </div>
               <div>
                 <div className="sidebar-user-name">{user.name || "Administrator"}</div>
@@ -929,7 +1559,11 @@ function AdminDashboard({ user, onLogout, showToast }) {
               <span className="topbar-breadcrumb-parent">Admin Portal</span>
               <span style={{ color: "#cbd5e1" }}>/</span>
               <span className="topbar-breadcrumb-current">
-                {activeTab === "dashboard" ? "Dashboard Overview" : "Employee Records"}
+                {activeTab === "dashboard"
+                  ? "Dashboard Overview"
+                  : activeTab === "requests"
+                    ? "Account Requests"
+                    : "Employee Records"}
               </span>
             </div>
           </div>
@@ -978,7 +1612,13 @@ function AdminDashboard({ user, onLogout, showToast }) {
                       {pendingRequests.map((request) => (
                         <article className="account-notification-item" key={request.id}>
                           <div className="account-notification-person">
-                            <strong>{request.name}</strong>
+                            <button
+                              type="button"
+                              className="account-request-name"
+                              onClick={() => openRequestReview(request)}
+                            >
+                              {request.name}
+                            </button>
                             <span>{request.email}</span>
                             <small>{request.department || "General"}</small>
                           </div>
@@ -1018,12 +1658,13 @@ function AdminDashboard({ user, onLogout, showToast }) {
             </div>
 
             <div className="topbar-profile">
-              <div
-                className="avatar-chip"
-                style={{ background: "#e0e7ff", color: "#4338ca", width: 34, height: 34 }}
-              >
-                {getInitials(user.name || user.email)}
-              </div>
+              <ProfilePhotoControl
+                image={user.profile_image}
+                initials={getInitials(user.name || user.email)}
+                uploading={uploadingProfilePhoto}
+                onUpload={handleProfilePhotoUpload}
+                onRemove={handleRemoveProfilePhoto}
+              />
               <button
                 className="btn btn-secondary"
                 style={{ padding: "0.4rem 0.75rem", fontSize: "0.8rem" }}
@@ -1044,24 +1685,22 @@ function AdminDashboard({ user, onLogout, showToast }) {
               <h1>
                 {activeTab === "dashboard"
                   ? `Welcome back, ${(user.name || "there").split(" ")[0]}.`
-                  : "Employee directory"}
+                  : activeTab === "requests"
+                    ? "Account requests"
+                    : "Employee directory"}
               </h1>
               <p className="page-description">
                 {activeTab === "dashboard"
                   ? "A clear overview of your people, departments, and workspace."
-                  : "Search, review, and manage your employee records in one place."}
+                  : activeTab === "requests"
+                    ? "Review employee account requests and choose whether to approve them."
+                    : "Search, review, and manage your employee records in one place."}
               </p>
             </div>
-            {activeTab === "dashboard" && (
-              <button className="btn btn-primary page-intro-action" onClick={handleOpenAdd}>
-                <PlusIcon size={16} />
-                <span>Add employee</span>
-              </button>
-            )}
           </section>
 
           {/* Stat Cards */}
-          <section className="stats-grid">
+          {activeTab === "dashboard" && <section className="stats-grid">
             <div className="stat-card">
               <div>
                 <div className="stat-info-title">Total Employees</div>
@@ -1096,7 +1735,29 @@ function AdminDashboard({ user, onLogout, showToast }) {
                 <FileTextIcon size={22} />
               </div>
             </div>
-          </section>
+            <button
+              type="button"
+              className="stat-card pending-request-stat"
+              onClick={() => navigateToTab("requests")}
+            >
+              <div>
+                <div className="stat-info-title">Pending requests</div>
+                <div className="stat-info-value">
+                  {requestLoadStatus === "loading" ? "…" : pendingRequests.length}
+                </div>
+                <div className="stat-info-desc">
+                  {requestLoadStatus === "error"
+                    ? "Could not load requests; click to retry"
+                    : requestLoadStatus === "loaded" && pendingRequests.length === 0
+                      ? "No requests pending"
+                      : "Click to review account requests"}
+                </div>
+              </div>
+              <div className="stat-icon-wrapper stat-icon-amber">
+                <BellIcon size={22} />
+              </div>
+            </button>
+          </section>}
 
           {/* ================================================================
               VIEW 1: DASHBOARD OVERVIEW (activeTab === "dashboard")
@@ -1213,20 +1874,6 @@ function AdminDashboard({ user, onLogout, showToast }) {
                     }}
                   >
                     <button
-                      className="btn btn-primary"
-                      style={{
-                        width: "100%",
-                        padding: "0.75rem",
-                        justifyContent: "flex-start",
-                        gap: "0.75rem",
-                      }}
-                      onClick={handleOpenAdd}
-                    >
-                      <PlusIcon size={18} />
-                      <span>Add New Employee</span>
-                    </button>
-
-                    <button
                       className="btn btn-secondary"
                       style={{
                         width: "100%",
@@ -1290,6 +1937,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                     <table className="ems-table">
                       <thead>
                         <tr>
+                          <th>Employee ID</th>
                           <th>Employee</th>
                           <th>Department</th>
                           <th>Contact</th>
@@ -1301,8 +1949,9 @@ function AdminDashboard({ user, onLogout, showToast }) {
                       </thead>
                       <tbody>
                         {employees
+                          .slice()
+                          .sort(compareEmployeeIds)
                           .slice(-5)
-                          .reverse()
                           .map((emp) => {
                             const id = getEmployeeId(emp);
                             const color = getAvatarColor(emp.name || emp.email);
@@ -1310,12 +1959,24 @@ function AdminDashboard({ user, onLogout, showToast }) {
                             return (
                               <tr key={id}>
                                 <td>
+                                  <span className="badge badge-gray">{emp.employee_id || "—"}</span>
+                                </td>
+
+                                <td>
                                   <div className="table-employee-cell">
                                     <div
                                       className="avatar-chip"
                                       style={{ backgroundColor: color.bg, color: color.text }}
                                     >
-                                      {getInitials(emp.name)}
+                                      {emp.profile_image ? (
+                                        <img
+                                          src={emp.profile_image}
+                                          alt=""
+                                          style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }}
+                                        />
+                                      ) : (
+                                        getInitials(emp.name)
+                                      )}
                                     </div>
                                     <div>
                                       <div className="employee-cell-name">{emp.name}</div>
@@ -1420,6 +2081,88 @@ function AdminDashboard({ user, onLogout, showToast }) {
             </>
           )}
 
+          {activeTab === "requests" && (
+            <section className="panel-card">
+              <div className="panel-card-header">
+                <div className="panel-title-group">
+                  <h2>Pending account requests</h2>
+                  <p>Review submitted details before approving or declining access.</p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={loadAccountRequests}
+                >
+                  <RefreshCwIcon size={16} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+              {requestLoadStatus === "error" ? (
+                <div className="table-empty-state">
+                  <p className="subtext">Account requests could not be loaded. Check the connection and try again.</p>
+                  <button type="button" className="btn btn-secondary" onClick={loadAccountRequests}>
+                    Try again
+                  </button>
+                </div>
+              ) : pendingRequests.length === 0 ? (
+                <div className="table-empty-state">
+                  <div className="empty-state-icon-box">
+                    <CheckCircleIcon size={26} />
+                  </div>
+                  <div className="empty-state-title">
+                    {requestLoadStatus === "loading" ? "Loading requests..." : "No pending requests"}
+                  </div>
+                  <div className="empty-state-desc">
+                    {requestLoadStatus === "loading"
+                      ? "Checking for new employee account requests."
+                      : "New employee account requests will appear here and in notifications."}
+                  </div>
+                </div>
+              ) : (
+                <div className="account-request-review-list">
+                  {pendingRequests.map((request) => (
+                    <article className="account-request-review-item" key={request.id}>
+                      <div className="account-notification-person">
+                        <button
+                          type="button"
+                          className="account-request-name"
+                          onClick={() => openRequestReview(request)}
+                        >
+                          {request.name}
+                        </button>
+                        <span>{request.email}</span>
+                        <small>{request.department || "General"}</small>
+                      </div>
+                      <div className="account-notification-actions">
+                        <button
+                          className="btn btn-secondary"
+                          type="button"
+                          onClick={() => openRequestReview(request)}
+                        >
+                          Review
+                        </button>
+                        <button
+                          className="btn btn-primary"
+                          type="button"
+                          onClick={() => approveAccount(request)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn btn-danger"
+                          type="button"
+                          onClick={() => declineAccount(request)}
+                        >
+                          Decline
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* ================================================================
               VIEW 2: FULL EMPLOYEE RECORDS DIRECTORY (activeTab === "employees")
               ================================================================ */}
@@ -1454,7 +2197,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                   <input
                     type="text"
                     className="toolbar-search-input"
-                    placeholder="Search by name, email, or department..."
+                    placeholder="Search by employee ID, name, email, or department..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
@@ -1527,6 +2270,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
                   <table className="ems-table">
                     <thead>
                       <tr>
+                        <th>Employee ID</th>
                         <th>Employee</th>
                         <th>Department</th>
                         <th>Contact Number</th>
@@ -1544,12 +2288,24 @@ function AdminDashboard({ user, onLogout, showToast }) {
                         return (
                           <tr key={id}>
                             <td>
+                              <span className="badge badge-gray">{emp.employee_id || "—"}</span>
+                            </td>
+
+                            <td>
                               <div className="table-employee-cell">
                                 <div
                                   className="avatar-chip"
                                   style={{ backgroundColor: color.bg, color: color.text }}
                                 >
-                                  {getInitials(emp.name)}
+                                  {emp.profile_image ? (
+                                    <img
+                                      src={emp.profile_image}
+                                      alt=""
+                                      style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }}
+                                    />
+                                  ) : (
+                                    getInitials(emp.name)
+                                  )}
                                 </div>
                                 <div>
                                   <div className="employee-cell-name">{emp.name}</div>
@@ -1604,13 +2360,20 @@ function AdminDashboard({ user, onLogout, showToast }) {
                             </td>
 
                             <td>
-                              <span className={`badge ${emp.account_status === "pending" ? "badge-amber" : emp.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
-                                {emp.account_status === "pending"
+                              <span className={`badge ${["pending", "deactivated"].includes(emp.account_status) ? "badge-amber" : emp.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
+                                {emp.account_status === "deactivated"
+                                  ? "Temporarily deactivated"
+                                  : emp.account_status === "pending"
                                   ? "Pending approval"
                                   : emp.account_status === "approved"
                                     ? "Approved"
                                     : "No account"}
                               </span>
+                              {emp.account_status === "deactivated" && emp.deactivated_until && (
+                                <div className="employee-cell-email" style={{ marginTop: "0.25rem" }}>
+                                  Until {new Date(emp.deactivated_until).toLocaleDateString()}
+                                </div>
+                              )}
                             </td>
 
                             <td>
@@ -1636,6 +2399,17 @@ function AdminDashboard({ user, onLogout, showToast }) {
                                   <EditIcon size={14} />
                                   <span>Edit</span>
                                 </button>
+
+                                {["approved", "deactivated"].includes(emp.account_status) && (
+                                  <button
+                                    className={emp.account_status === "deactivated" ? "action-btn edit" : "action-btn"}
+                                    onClick={() => setAccessModal(emp)}
+                                    title={emp.account_status === "deactivated" ? "Reactivate employee access" : "Temporarily deactivate employee access"}
+                                  >
+                                    <ShieldIcon size={14} />
+                                    <span>{emp.account_status === "deactivated" ? "Reactivate" : "Deactivate"}</span>
+                                  </button>
+                                )}
 
                                 <button
                                   className="action-btn key"
@@ -1674,14 +2448,30 @@ function AdminDashboard({ user, onLogout, showToast }) {
       {formModalOpen && (
         <EmployeeFormModal
           employee={editingEmployee}
-          onClose={() => setFormModalOpen(false)}
-          onSuccess={(_, isEdit) => {
+          onClose={() => {
             setFormModalOpen(false);
+            if (/^\/admin\/employees\/[^/]+$/.test(pathname)) {
+              navigate("/admin/employees", true);
+            }
+          }}
+          onDelete={() => {
+            setFormModalOpen(false);
+            setDeleteModal(editingEmployee);
+          }}
+          onManageAccess={() => setAccessModal(editingEmployee)}
+          onSuccess={(result, isEdit) => {
+            setFormModalOpen(false);
+            if (/^\/admin\/employees\/[^/]+$/.test(pathname)) {
+              navigate("/admin/employees", true);
+            }
             loadEmployees();
             if (isEdit) {
               showToast("Employee details updated successfully.", "success");
             } else {
-              showToast("Employee record created successfully!", "success");
+              showToast(
+                result.message || "Employee record created successfully!",
+                "success",
+              );
             }
           }}
           showToast={showToast}
@@ -1712,11 +2502,84 @@ function AdminDashboard({ user, onLogout, showToast }) {
           onClose={() => setDeleteModal(null)}
           onSuccess={() => {
             setDeleteModal(null);
+            if (/^\/admin\/employees\/[^/]+$/.test(pathname)) {
+              navigate("/admin/employees", true);
+            }
             loadEmployees();
             showToast("Employee and linked account deleted safely.", "success");
           }}
           showToast={showToast}
         />
+      )}
+      {accessModal && (
+        <EmployeeAccessModal
+          employee={accessModal}
+          onClose={() => setAccessModal(null)}
+          onSuccess={(result) => handleAccessStatusChange(accessModal, result)}
+          showToast={showToast}
+        />
+      )}
+      {reviewRequest && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setReviewRequest(null);
+          }}
+        >
+          <section
+            className="modal-card account-request-review-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="account-request-review-title"
+          >
+            <div className="modal-header">
+              <div>
+                <h3 id="account-request-review-title">Review account request</h3>
+                <p className="subtext">Submitted employee details</p>
+              </div>
+              <button
+                type="button"
+                className="btn-icon"
+                aria-label="Close request review"
+                onClick={() => setReviewRequest(null)}
+              >
+                <XIcon size={18} />
+              </button>
+            </div>
+            <dl className="account-request-details">
+              <div><dt>Name</dt><dd>{reviewRequest.name || "—"}</dd></div>
+              <div><dt>Email</dt><dd>{reviewRequest.email || "—"}</dd></div>
+              <div><dt>Department</dt><dd>{reviewRequest.department || "General"}</dd></div>
+              <div><dt>Request ID</dt><dd>{reviewRequest.id}</dd></div>
+              {reviewRequest.created_at && (
+                <div>
+                  <dt>Submitted</dt>
+                  <dd>
+                    {Number.isNaN(Date.parse(reviewRequest.created_at))
+                      ? reviewRequest.created_at
+                      : new Date(reviewRequest.created_at).toLocaleString()}
+                  </dd>
+                </div>
+              )}
+            </dl>
+            <div className="account-request-review-actions">
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => declineAccount(reviewRequest)}
+              >
+                Decline request
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => approveAccount(reviewRequest)}
+              >
+                Approve request
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
@@ -1726,7 +2589,7 @@ function AdminDashboard({ user, onLogout, showToast }) {
 // 7. ADD / EDIT EMPLOYEE MODAL
 // ==========================================================================
 
-function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
+function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSuccess, showToast }) {
   const isEdit = Boolean(employee);
   const [form, setForm] = useState({
     name: employee?.name || "",
@@ -1749,13 +2612,15 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
     setSaving(true);
 
     try {
-      const payload = {
-        name: form.name.trim(),
-        email: form.email.trim().toLowerCase(),
-        department: form.department.trim(),
-        contact_number: form.contact_number.trim(),
-        address: form.address.trim(),
-      };
+      const payload = isEdit
+        ? {
+            name: form.name.trim(),
+            email: form.email.trim().toLowerCase(),
+            department: form.department.trim(),
+            contact_number: form.contact_number.trim(),
+            address: form.address.trim(),
+          }
+        : { email: form.email.trim().toLowerCase() };
 
       let result;
       if (isEdit) {
@@ -1788,8 +2653,8 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
             <h3>{isEdit ? "Edit Employee Details" : "Add New Employee"}</h3>
             <p className="subtext">
               {isEdit
-                ? "Update organizational details for this employee."
-                : "Add the employee to the directory. They can request account access after their record is added."}
+                ? `Employee ID: ${employee.employee_id || getEmployeeId(employee)}`
+                : "Enter the employee's email to send a one-time account invitation."}
             </p>
           </div>
           <button className="btn-icon" onClick={onClose} aria-label="Close modal">
@@ -1806,19 +2671,40 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
               </div>
             )}
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="emp-name">Full Name *</label>
-              <input
-                id="emp-name"
-                name="name"
-                type="text"
-                className="input-field no-icon"
-                placeholder="e.g. Sarah Jenkins"
-                value={form.name}
-                onChange={handleChange}
-                required
-              />
-            </div>
+            {isEdit && (
+              <div className="form-group">
+                <label className="form-label">Login access</label>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <span className={`badge ${employee.account_status === "deactivated" ? "badge-amber" : employee.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
+                    {employee.account_status === "deactivated"
+                      ? "Temporarily deactivated"
+                      : employee.account_status === "approved"
+                        ? "Approved"
+                        : employee.account_status === "pending"
+                          ? "Pending approval"
+                          : "No account"}
+                  </span>
+                  {["approved", "deactivated"].includes(employee.account_status) ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={onManageAccess}
+                      disabled={saving}
+                    >
+                      <ShieldIcon size={14} />
+                      <span>{employee.account_status === "deactivated" ? "Reactivate access" : "Deactivate temporarily"}</span>
+                    </button>
+                  ) : (
+                    <span className="subtext">Temporary deactivation is available after approval.</span>
+                  )}
+                  {employee.account_status === "deactivated" && employee.deactivated_until && (
+                    <span className="subtext">
+                      Access returns {new Date(employee.deactivated_until).toLocaleString()}.
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="form-group">
               <label className="form-label" htmlFor="emp-email">Work Email *</label>
@@ -1830,49 +2716,72 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
                 placeholder="e.g. s.jenkins@company.com"
                 value={form.email}
                 onChange={handleChange}
+                maxLength={254}
                 required
               />
             </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="emp-dept">Department *</label>
-              <input
-                id="emp-dept"
-                name="department"
-                type="text"
-                className="input-field no-icon"
-                placeholder="e.g. Engineering, Human Resources, Finance"
-                value={form.department}
-                onChange={handleChange}
-                required
-              />
-            </div>
+            {isEdit && (
+              <>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="emp-name">Full Name *</label>
+                  <input
+                    id="emp-name"
+                    name="name"
+                    type="text"
+                    className="input-field no-icon"
+                    placeholder="e.g. Sarah Jenkins"
+                    value={form.name}
+                    onChange={handleChange}
+                    maxLength={100}
+                    required
+                  />
+                </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="emp-contact">Contact Number</label>
-              <input
-                id="emp-contact"
-                name="contact_number"
-                type="tel"
-                className="input-field no-icon"
-                placeholder="e.g. +1 (555) 234-5678"
-                value={form.contact_number}
-                onChange={handleChange}
-              />
-            </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="emp-dept">Department *</label>
+                  <input
+                    id="emp-dept"
+                    name="department"
+                    type="text"
+                    className="input-field no-icon"
+                    placeholder="e.g. Engineering, Human Resources, Finance"
+                    value={form.department}
+                    onChange={handleChange}
+                    maxLength={100}
+                    required
+                  />
+                </div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="emp-address">Physical Address</label>
-              <textarea
-                id="emp-address"
-                name="address"
-                rows={2}
-                className="input-field no-icon"
-                placeholder="e.g. 742 Evergreen Terrace, Springfield"
-                value={form.address}
-                onChange={handleChange}
-              />
-            </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="emp-contact">Contact Number</label>
+                  <input
+                    id="emp-contact"
+                    name="contact_number"
+                    type="tel"
+                    className="input-field no-icon"
+                    placeholder="e.g. +1 (555) 234-5678"
+                    value={form.contact_number}
+                    onChange={handleChange}
+                    maxLength={50}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor="emp-address">Physical Address</label>
+                  <textarea
+                    id="emp-address"
+                    name="address"
+                    rows={2}
+                    className="input-field no-icon"
+                    placeholder="e.g. 742 Evergreen Terrace, Springfield"
+                    value={form.address}
+                    onChange={handleChange}
+                    maxLength={500}
+                  />
+                </div>
+              </>
+            )}
 
             {isEdit && (
               <div className="form-group" style={{ marginTop: "1rem" }}>
@@ -1936,6 +2845,17 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
           </div>
 
           <div className="modal-footer">
+            {isEdit && (
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={onDelete}
+                disabled={saving}
+              >
+                <TrashIcon size={14} />
+                <span>Delete Employee</span>
+              </button>
+            )}
             <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
               Cancel
             </button>
@@ -1943,15 +2863,129 @@ function EmployeeFormModal({ employee, onClose, onSuccess, showToast }) {
               {saving ? (
                 <>
                   <RefreshCwIcon size={16} className="animate-spin" />
-                  <span>Saving...</span>
+                  <span>{isEdit ? "Saving..." : "Sending invitation..."}</span>
                 </>
               ) : (
-                <span>{isEdit ? "Save Changes" : "Create Employee"}</span>
+                <span>{isEdit ? "Save Changes" : "Send Invitation"}</span>
               )}
             </button>
           </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+function EmployeeAccessModal({ employee, onClose, onSuccess, showToast }) {
+  const [durationDays, setDurationDays] = useState("7");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const isDeactivated = employee.account_status === "deactivated";
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+
+    try {
+      const id = getEmployeeId(employee);
+      const result = await api(
+        isDeactivated
+          ? `/employees/${id}/reactivate`
+          : `/employees/${id}/deactivate`,
+        {
+          method: "POST",
+          ...(isDeactivated
+            ? {}
+            : {
+                body: JSON.stringify({
+                  duration_days: Number(durationDays),
+                }),
+              }),
+        },
+      );
+      onSuccess(result);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      showToast(message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="access-modal-title">
+        <div className="modal-header">
+          <div>
+            <h3 id="access-modal-title">
+              {isDeactivated ? "Reactivate employee access" : "Temporarily deactivate access"}
+            </h3>
+            <p className="subtext">
+              {employee.name} · {employee.employee_id}
+            </p>
+          </div>
+          <button className="btn-icon" onClick={onClose} aria-label="Close dialog">
+            <XIcon size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            {error && (
+              <div className="toast-item error" style={{ minWidth: "auto", marginBottom: "1rem" }}>
+                <AlertCircleIcon size={18} />
+                <span>{error}</span>
+              </div>
+            )}
+            {isDeactivated ? (
+              <p>
+                Restore sign-in access now? The scheduled reactivation date is{" "}
+                {employee.deactivated_until
+                  ? new Date(employee.deactivated_until).toLocaleString()
+                  : "in the future"}.
+              </p>
+            ) : (
+              <>
+                <p>
+                  This blocks the employee from signing in and using protected features.
+                  Access will automatically return after the selected period.
+                </p>
+                <div className="form-group" style={{ marginTop: "1rem" }}>
+                  <label className="form-label" htmlFor="deactivation-duration">
+                    Deactivate for
+                  </label>
+                  <select
+                    id="deactivation-duration"
+                    className="toolbar-select"
+                    value={durationDays}
+                    onChange={(event) => setDurationDays(event.target.value)}
+                  >
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="14">14 days</option>
+                    <option value="30">30 days</option>
+                  </select>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className={isDeactivated ? "btn btn-primary" : "btn btn-danger"}
+              disabled={saving}
+            >
+              {saving ? "Saving..." : isDeactivated ? "Reactivate access" : "Deactivate access"}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
@@ -2157,6 +3191,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
+  const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
 
   async function loadProfile() {
     setLoading(true);
@@ -2168,6 +3203,8 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
         department: data.department || "",
         contact_number: data.contact_number || "",
         address: data.address || "",
+        employee_id: data.employee_id || "",
+        profile_image: data.profile_image || "",
         resume_original_name: data.resume_original_name || null,
         resume_uploaded_at: data.resume_uploaded_at || null,
         resume_size_bytes: data.resume_size_bytes || null,
@@ -2182,6 +3219,63 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
   useEffect(() => {
     loadProfile();
   }, []);
+
+  async function handleProfilePhotoUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      showToast("Choose a PNG, JPEG, or WebP image.", "error");
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      showToast("Profile image must be smaller than 2MB.", "error");
+      event.target.value = "";
+      return;
+    }
+
+    setUploadingProfilePhoto(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const result = await api("/employees/me/photo", {
+          method: "PUT",
+          body: JSON.stringify({ file_data: reader.result }),
+        });
+        setProfile((current) => ({
+          ...current,
+          profile_image: result.profile_image,
+        }));
+        showToast("Profile photo updated.", "success");
+      } catch (err) {
+        showToast(getErrorMessage(err), "error");
+      } finally {
+        setUploadingProfilePhoto(false);
+        event.target.value = "";
+      }
+    };
+
+    reader.onerror = () => {
+      showToast("Could not read the selected image.", "error");
+      setUploadingProfilePhoto(false);
+      event.target.value = "";
+    };
+
+    reader.readAsDataURL(file);
+  }
+
+  async function handleRemoveProfilePhoto() {
+    try {
+      await api("/employees/me/photo", { method: "DELETE" });
+      setProfile((current) => ({ ...current, profile_image: "" }));
+      showToast("Profile photo removed.", "success");
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  }
 
   async function handleResumeUpload(event) {
     const file = event.target.files?.[0];
@@ -2354,12 +3448,13 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
 
         <div className="topbar-right">
           <div className="topbar-profile">
-            <div
-              className="avatar-chip"
-              style={{ background: "#e0e7ff", color: "#4338ca", width: 34, height: 34 }}
-            >
-              {getInitials(profile.name || user.email)}
-            </div>
+            <ProfilePhotoControl
+              image={profile.profile_image}
+              initials={getInitials(profile.name || user.email)}
+              uploading={uploadingProfilePhoto}
+              onUpload={handleProfilePhotoUpload}
+              onRemove={handleRemoveProfilePhoto}
+            />
             <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#334155" }}>
               {profile.name || user.email}
             </span>
@@ -2380,9 +3475,14 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
         {/* Welcome Hero Banner */}
         <section className="employee-hero-card">
           <div className="employee-hero-left">
-            <div className="employee-big-avatar">
-              {getInitials(profile.name || user.email)}
-            </div>
+            <ProfilePhotoControl
+              image={profile.profile_image}
+              initials={getInitials(profile.name || user.email)}
+              uploading={uploadingProfilePhoto}
+              onUpload={handleProfilePhotoUpload}
+              onRemove={handleRemoveProfilePhoto}
+              large
+            />
             <div>
               <div className="employee-hero-title">
                 Welcome back, {profile.name || "Employee"}!
@@ -2392,6 +3492,11 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
                 <span>&bull;</span>
                 <span className="badge badge-indigo">
                   {profile.department || "Employee"}
+                </span>
+              </div>
+              <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                <span className="badge badge-gray">
+                  Employee ID: {loading ? "Loading..." : profile.employee_id || "Not assigned"}
                 </span>
               </div>
             </div>
@@ -2420,7 +3525,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
 
               <form onSubmit={handleUpdateProfile} style={{ padding: "1.5rem" }}>
                 <div className="form-group">
-                  <label className="form-label" htmlFor="prof-name">Full Name</label>
+                  <label className="form-label" htmlFor="prof-name">Name / Username</label>
                   <input
                     id="prof-name"
                     name="name"
@@ -2469,7 +3574,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label" htmlFor="prof-address">Address</label>
+                  <label className="form-label" htmlFor="prof-address">Location</label>
                   <textarea
                     id="prof-address"
                     name="address"

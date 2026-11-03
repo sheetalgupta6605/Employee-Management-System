@@ -24,6 +24,7 @@ db = client["employee_management"]
 users_collection = db["users"]
 employees_collection = db["employees"]
 account_requests_collection = db["account_requests"]
+employee_invites_collection = db["employee_invites"]
 
 
 def init_db_indexes():
@@ -31,7 +32,14 @@ def init_db_indexes():
     try:
         users_collection.create_index("email", unique=True)
         employees_collection.create_index("email", unique=True)
+        employees_collection.create_index(
+            "employee_id",
+            unique=True,
+            partialFilterExpression={"employee_id": {"$type": "string"}},
+        )
         account_requests_collection.create_index("email", unique=True)
+        employee_invites_collection.create_index("token_hash", unique=True)
+        employee_invites_collection.create_index("expires_at", expireAfterSeconds=0)
         print("MongoDB indexes created successfully.")
     except Exception as e:
         print(f"[Warning] Could not create indexes: {e}")

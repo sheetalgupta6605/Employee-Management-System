@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pwdlib import PasswordHash
 
@@ -14,6 +14,8 @@ from database import users_collection
 load_dotenv()
 
 JWT_SECRET = os.getenv("JWT_SECRET")
+
+
 
 if not JWT_SECRET:
     raise RuntimeError("JWT_SECRET is missing from .env")
@@ -38,6 +40,21 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return password_hash.verify(password, hashed_password)
 
 
+def get_deactivated_until(user: dict) -> datetime | None:
+    """Return a future deactivation deadline, normalizing MongoDB's naive UTC dates."""
+    deactivated_until = user.get("deactivated_until")
+    if not isinstance(deactivated_until, datetime):
+        return None
+
+    if deactivated_until.tzinfo is None:
+        deactivated_until = deactivated_until.replace(tzinfo=timezone.utc)
+
+    if deactivated_until <= datetime.now(timezone.utc):
+        return None
+
+    return deactivated_until
+
+
 def create_access_token(user: dict) -> str:
     """Create a signed login token."""
     payload = {
@@ -55,6 +72,7 @@ def create_access_token(user: dict) -> str:
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(
         bearer_scheme
     ),
@@ -101,6 +119,20 @@ def get_current_user(
 
     # Compare legacy role values consistently (for example, "Admin").
     user["role"] = str(user.get("role", "")).strip().lower()
+    if user["role"] == "employee" and get_deactivated_until(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is temporarily deactivated. Contact your administrator.",
+        )
+    if (
+        user["role"] == "employee"
+        and user.get("must_change_password")
+        and request.url.path not in {"/auth/me", "/employees/me/password"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Change your temporary password before using your account.",
+        )
 
     return user
 

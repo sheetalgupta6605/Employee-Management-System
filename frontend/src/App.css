@@ -224,6 +224,98 @@ a {
   text-transform: uppercase;
 }
 
+.photo-upload-avatar {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.photo-upload-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.photo-upload-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 150px;
+  padding: 0.35rem;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-lg);
+}
+
+.photo-upload-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.photo-upload-menu button:hover:not(:disabled) {
+  background: var(--surface-subtle);
+}
+
+.photo-upload-menu button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.photo-upload-input {
+  display: none;
+}
+
+.photo-upload-avatar::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: rgba(15, 23, 42, 0.62);
+  color: #fff;
+  content: "Edit";
+  font-size: 0.65rem;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.photo-upload-avatar:hover::after,
+.photo-upload-avatar:focus-within::after {
+  opacity: 1;
+}
+
+.photo-upload-indicator {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: rgba(15, 23, 42, 0.62);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
 /* ==========================================================================
    AUTHENTICATION / LOGIN PAGE (SPLIT SCREEN)
    ========================================================================== */
@@ -833,6 +925,78 @@ a {
   white-space: nowrap;
 }
 
+.account-request-name {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.account-request-name:hover {
+  color: var(--indigo-600);
+  text-decoration: underline;
+}
+
+.account-request-review-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.account-request-review-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.account-request-review-item:last-child {
+  border-bottom: 0;
+}
+
+.account-request-review-item .account-notification-actions {
+  flex-shrink: 0;
+}
+
+.account-request-details {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1.25rem 1.5rem;
+}
+
+.account-request-details > div {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.65fr) 1.35fr;
+  gap: 1rem;
+}
+
+.account-request-details dt {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.account-request-details dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-main);
+  overflow-wrap: anywhere;
+}
+
+.account-request-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding: 0 1.5rem 1.25rem;
+}
+
 .account-notification-actions {
   display: flex;
   gap: 0.55rem;
@@ -841,6 +1005,17 @@ a {
 .account-notification-actions .btn {
   padding: 0.42rem 0.75rem;
   font-size: 0.76rem;
+}
+
+@media (max-width: 640px) {
+  .account-request-review-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-request-review-item .account-notification-actions {
+    flex-wrap: wrap;
+  }
 }
 
 .account-notification-empty {
@@ -913,6 +1088,20 @@ a {
   box-shadow: var(--shadow-md);
   border-color: #cbd5e1;
   transform: translateY(-2px);
+}
+
+.pending-request-stat {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pending-request-stat:focus-visible,
+.account-request-name:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, 0.35);
+  outline-offset: 3px;
 }
 
 .stat-info-title {

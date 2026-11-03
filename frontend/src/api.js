@@ -59,8 +59,10 @@ export async function api(path, options = {}) {
   };
 
   const token = getToken();
+  const endpoint = path.replace(/^\/+/, "");
+  const isPublicInvitationRequest = endpoint.startsWith("employee-invites/");
 
-  if (token) {
+  if (token && !isPublicInvitationRequest) {
     headers.Authorization = `Bearer ${token}`;
   }
 
@@ -87,10 +89,17 @@ export async function api(path, options = {}) {
   if (!response.ok) {
     const detail = data?.detail;
 
+    if (response.status === 401 && detail === "Invalid or expired login token") {
+      clearToken();
+      window.dispatchEvent(new Event("employee-app:auth-expired"));
+    }
+
     const message = Array.isArray(detail)
       ? detail.map((item) => item.msg).join(", ")
       : typeof detail === "string"
-        ? detail
+        ? detail === "Invalid or expired login token"
+          ? "Your session expired. Sign in again, then resend the invitation."
+          : detail
         : `Request failed with status ${response.status}`;
 
     throw Object.assign(new Error(message), { status: response.status });
