@@ -457,37 +457,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let active = true;
+    const currentPath = window.location.pathname;
 
-    async function checkLogin() {
-      if (window.location.pathname === "/login" || getInvitationToken(window.location.pathname)) {
-        if (active) setCheckingAuth(false);
-        return;
-      }
-
-      const token = localStorage.getItem("employee_app_token");
-
-      if (!token) {
-        if (active) setCheckingAuth(false);
-        return;
-      }
-
-      try {
-        const account = await api("/auth/me");
-        if (active) setUser(account);
-      } catch {
-        clearToken();
-        if (active) setUser(null);
-      } finally {
-        if (active) setCheckingAuth(false);
-      }
+    if (!getInvitationToken(currentPath)) {
+      clearToken();
+      if (currentPath !== "/login") navigate("/login", true);
     }
 
-    checkLogin();
-
-    return () => {
-      active = false;
-    };
+    setCheckingAuth(false);
   }, []);
 
   useEffect(() => {
