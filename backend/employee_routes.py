@@ -105,7 +105,7 @@ def upload_my_resume(
     if len(pdf_bytes) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Resume file exceeds the 5MB size limit.")
 
-    safe_name = f"resume_{employee['_id']}_{int(datetime.now(timezone.utc).timestamp())}.pdf"
+    safe_name = f"resume_{employee['_id']}_{int(datetime.now(timezone(timedelta(hours=5, minutes=30))).timestamp())}.pdf"
     file_path = os.path.join(RESUMES_DIR, safe_name)
 
     old_filename = employee.get("resume_stored_name")
@@ -124,7 +124,7 @@ def upload_my_resume(
         "resume_original_name": payload.filename,
         "resume_stored_name": safe_name,
         "resume_size_bytes": len(pdf_bytes),
-        "resume_uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "resume_uploaded_at": datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat(),
     }
     employees_collection.update_one({"_id": employee["_id"]}, {"$set": resume_meta})
     return {"message": "Resume uploaded successfully", **resume_meta}
@@ -300,7 +300,7 @@ def deactivate_employee(
             detail="Only an approved employee account can be deactivated.",
         )
 
-    deactivated_until = datetime.now(timezone.utc) + timedelta(days=payload.duration_days)
+    deactivated_until = datetime.now(timezone(timedelta(hours=5, minutes=30))) + timedelta(days=payload.duration_days)
     users_collection.update_one(
         {"_id": account["_id"]},
         {"$set": {"deactivated_until": deactivated_until}},
@@ -408,7 +408,7 @@ def set_employee_account_password(
             "role": "employee",
             "employee_id": str(object_id),
             "status": "approved",
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone(timedelta(hours=5, minutes=30))),
         })
 
     account_requests_collection.delete_one({"email": normalized_email})

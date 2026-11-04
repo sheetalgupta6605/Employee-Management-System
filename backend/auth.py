@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import FastAPI , Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pwdlib import PasswordHash
 
@@ -41,15 +41,15 @@ def verify_password(password: str, hashed_password: str) -> bool:
 
 
 def get_deactivated_until(user: dict) -> datetime | None:
-    """Return a future deactivation deadline, normalizing MongoDB's naive UTC dates."""
+    """Return a future deactivation deadline, normalizing MongoDB's naive ist dates."""
     deactivated_until = user.get("deactivated_until")
     if not isinstance(deactivated_until, datetime):
         return None
 
     if deactivated_until.tzinfo is None:
-        deactivated_until = deactivated_until.replace(tzinfo=timezone.utc)
+        deactivated_until = deactivated_until.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
 
-    if deactivated_until <= datetime.now(timezone.utc):
+    if deactivated_until <= datetime.now(timezone(timedelta(hours=5, minutes=30))):
         return None
 
     return deactivated_until
@@ -60,7 +60,7 @@ def create_access_token(user: dict) -> str:
     payload = {
         "sub": str(user["_id"]),
         "role": user["role"],
-        "exp": datetime.now(timezone.utc)
+        "exp": datetime.now(timezone(timedelta(hours=5, minutes=30)))
         + timedelta(minutes=TOKEN_EXPIRE_MINUTES),
     }
 

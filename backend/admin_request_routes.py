@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
@@ -100,7 +100,7 @@ def approve_account_request(
                     "role": "employee",
                     "employee_id": str(employee["_id"]),
                     "status": "approved",
-                    "created_at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(timezone(timedelta(hours=5, minutes=30))),
                 }
             )
         except DuplicateKeyError as error:

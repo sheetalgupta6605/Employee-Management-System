@@ -1,6 +1,6 @@
 
 from getpass import getpass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pymongo.errors import DuplicateKeyError
 
@@ -32,7 +32,7 @@ admin = {
     "email": email,
     "password": hash_password(password),
     "role": "admin",
-    "created_at": datetime.now(timezone.utc),
+    "created_at": datetime.now(timezone(timedelta(hours=5, minutes=30))),
 }
 
 try:

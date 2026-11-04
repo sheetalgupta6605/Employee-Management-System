@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pymongo.errors import DuplicateKeyError
@@ -33,7 +33,7 @@ def signup(user: UserSignup):
         "email": email,
         "department": user.department.strip(),
         "password_hash": hash_password(user.password),
-        "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone(timedelta(hours=5, minutes=30))),
     }
 
     try:

@@ -60,9 +60,12 @@ export async function api(path, options = {}) {
 
   const token = getToken();
   const endpoint = path.replace(/^\/+/, "");
-  const isPublicInvitationRequest = endpoint.startsWith("employee-invites/");
+  const isPublicRequest =
+    endpoint.startsWith("employee-invites/") ||
+    endpoint === "auth/login" ||
+    endpoint === "auth/signup";
 
-  if (token && !isPublicInvitationRequest) {
+  if (token && !isPublicRequest) {
     headers.Authorization = `Bearer ${token}`;
   }
 
@@ -89,7 +92,7 @@ export async function api(path, options = {}) {
   if (!response.ok) {
     const detail = data?.detail;
 
-    if (response.status === 401 && detail === "Invalid or expired login token") {
+    if (response.status === 401 && token && !isPublicRequest) {
       clearToken();
       window.dispatchEvent(new Event("employee-app:auth-expired"));
     }

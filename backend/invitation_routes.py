@@ -39,7 +39,7 @@ def create_employee_invitation(
         raise HTTPException(status_code=409, detail="An account request with this email is already pending")
 
     raw_token = secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
     invite = {
         "email": email,
         "token_hash": hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
@@ -79,7 +79,7 @@ def get_employee_invite(token: str):
     invite = employee_invites_collection.find_one(
         {
             "token_hash": token_hash,
-            "expires_at": {"$gt": datetime.now(timezone.utc)},
+            "expires_at": {"$gt": datetime.now(timezone(timedelta(hours=5, minutes=30)))},
             "claimed_at": {"$exists": False},
             "revoked_at": {"$exists": False},
         }
@@ -103,7 +103,7 @@ def get_employee_invite(token: str):
 @router.post("/employee-invites/{token}", status_code=status.HTTP_201_CREATED)
 def complete_employee_invite(token: str, payload: EmployeeInviteComplete):
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
     invite = employee_invites_collection.find_one_and_update(
         {
             "token_hash": token_hash,

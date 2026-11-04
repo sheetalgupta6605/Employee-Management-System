@@ -1,6 +1,6 @@
 import base64
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 from fastapi import HTTPException
@@ -134,7 +134,7 @@ def migrate_legacy_account_requests() -> None:
                     "email": email,
                     "department": employee.get("department", "General") if employee else "General",
                     "password_hash": account["password"],
-                    "created_at": account.get("created_at", datetime.now(timezone.utc)),
+                    "created_at": account.get("created_at", datetime.now(timezone(timedelta(hours=5, minutes=30)))),
                 }
             },
             upsert=True,

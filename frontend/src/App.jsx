@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { api, clearToken, saveToken, downloadFile } from "./api";
+import { api, clearToken, getToken, saveToken, downloadFile } from "./api";
+import AdminTicketManagement from "./AdminTicketManagement";
+import EmployeeTicketSupport from "./EmployeeTicketSupport";
 import "./App.css";
 
 // ==========================================================================
@@ -427,6 +429,11 @@ function getInvitationToken(pathname) {
 export default function App() {
   const [user, setUser] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  const [authCheckError, setAuthCheckError] = useState("");
+  const [authCheckAttempt, setAuthCheckAttempt] = useState(0);
+  const [isPageRefresh] = useState(
+    () => window.performance.getEntriesByType("navigation")[0]?.type === "reload",
+  );
   const [toast, setToast] = useState(null);
   const [pathname, setPathname] = useState(() => window.location.pathname);
 
@@ -445,9 +452,12 @@ export default function App() {
 
   useEffect(() => {
     function handleExpiredAuth() {
+      clearToken();
       setUser(null);
+      setAuthCheckError("");
+      setCheckingAuth(false);
       setToast({ message: "Your session expired. Please sign in again.", type: "info" });
-      if (!getInvitationToken(window.location.pathname)) {
+      if (window.location.pathname !== "/login" && !getInvitationToken(window.location.pathname)) {
         navigate("/login", true);
       }
     }
@@ -457,38 +467,96 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const currentPath = window.location.pathname;
+    let active = true;
 
-    if (!getInvitationToken(currentPath)) {
-      clearToken();
-      if (currentPath !== "/login") navigate("/login", true);
+    async function restoreSession() {
+      const currentPath = window.location.pathname;
+      if (
+        !isPageRefresh &&
+        currentPath !== "/login" &&
+        !getInvitationToken(currentPath)
+      ) {
+        setUser(null);
+        setAuthCheckError("");
+        navigate("/login", true);
+        setCheckingAuth(false);
+        return;
+      }
+
+      const token = getToken();
+      if (!token) {
+        setUser(null);
+        setAuthCheckError("");
+        setCheckingAuth(false);
+        return;
+      }
+
+      try {
+        const account = await api("/auth/me");
+        if (!active) return;
+        const role = String(account.role || "").trim().toLowerCase();
+        if (!["admin", "employee"].includes(role)) {
+          clearToken();
+          setUser(null);
+          setAuthCheckError("");
+          return;
+        }
+        setUser({
+          id: account.id,
+          name: account.name || "",
+          email: account.email || "",
+          role,
+          profile_image: account.profile_image || "",
+          must_change_password: Boolean(account.must_change_password),
+        });
+        setAuthCheckError("");
+      } catch (error) {
+        if (!active) return;
+        if (error.status === 401) {
+          clearToken();
+          setUser(null);
+          setAuthCheckError("");
+        } else {
+          setAuthCheckError(
+            error.message || "Could not verify your session. Check your connection and try again.",
+          );
+        }
+      } finally {
+        if (active) setCheckingAuth(false);
+      }
     }
 
-    setCheckingAuth(false);
-  }, []);
+    const timer = window.setTimeout(() => void restoreSession(), 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [authCheckAttempt, isPageRefresh]);
 
   useEffect(() => {
-    if (checkingAuth) return;
+    if (checkingAuth || authCheckError) return;
 
     if (getInvitationToken(pathname)) return;
 
+    if (pathname === "/login") return;
+
+    if (pathname === "/") {
+      navigate("/login", true);
+      return;
+    }
+
     if (!user) {
-      if (pathname !== "/login") navigate("/login", true);
+      navigate("/login", true);
       return;
     }
 
     if (!["admin", "employee"].includes(user.role)) {
       clearToken();
-      setUser(null);
       navigate("/login", true);
       return;
     }
 
-    if (pathname === "/login") {
-      clearToken();
-      setUser(null);
-      return;
-    }
+    const homePath = user.role === "admin" ? "/admin/dashboard" : "/employee/dashboard";
 
     const requestedRole = pathname.startsWith("/admin")
       ? "admin"
@@ -497,16 +565,13 @@ export default function App() {
         : null;
 
     if (requestedRole && requestedRole !== user.role) {
-      clearToken();
-      setUser(null);
-      navigate("/login", true);
+      navigate(homePath, true);
       return;
     }
 
-    const homePath = user.role === "admin" ? "/admin/dashboard" : "/employee/dashboard";
     const isAdminEmployeeDetailPath = /^\/admin\/employees\/[^/]+$/.test(pathname);
     const allowedPaths = user.role === "admin"
-      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests"]
+      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests", "/admin/tickets"]
       : ["/employee", "/employee/dashboard"];
 
     if (!allowedPaths.includes(pathname) && !(user.role === "admin" && isAdminEmployeeDetailPath)) {
@@ -514,9 +579,10 @@ export default function App() {
     } else if (pathname === "/admin" || pathname === "/employee") {
       navigate(homePath, true);
     }
-  }, [checkingAuth, pathname, user]);
+  }, [authCheckError, checkingAuth, pathname, user]);
 
   function handleLogin(account) {
+    setAuthCheckError("");
     setUser(account);
     navigate(account.role === "admin" ? "/admin/dashboard" : "/employee/dashboard", true);
     showToast(`Welcome back, ${account.name || account.email}!`, "success");
@@ -546,7 +612,33 @@ export default function App() {
 
   return (
     <>
-      {invitationToken ? (
+      {authCheckError && pathname !== "/login" && !invitationToken ? (
+        <main className="auth-single-wrapper">
+          <section className="auth-single-card" role="alert">
+            <div className="brand-icon-box" style={{ margin: "0 auto 1rem" }}>
+              <AlertCircleIcon size={24} />
+            </div>
+            <h1 className="h2" style={{ textAlign: "center", marginBottom: "0.5rem" }}>
+              Session check unavailable
+            </h1>
+            <p className="subtext" style={{ textAlign: "center", marginBottom: "1.25rem" }}>
+              {authCheckError}
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: "100%" }}
+              onClick={() => {
+                setAuthCheckError("");
+                setCheckingAuth(true);
+                setAuthCheckAttempt((attempt) => attempt + 1);
+              }}
+            >
+              Retry session check
+            </button>
+          </section>
+        </main>
+      ) : invitationToken ? (
         <AcceptEmployeeInvite
           token={invitationToken}
           onLogin={handleLogin}
@@ -1157,6 +1249,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
       ? "employees"
       : window.location.pathname === "/admin/requests"
         ? "requests"
+        : window.location.pathname === "/admin/tickets"
+          ? "tickets"
         : "dashboard",
   );
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
@@ -1279,6 +1373,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
           ? "employees"
           : window.location.pathname === "/admin/requests"
             ? "requests"
+            : window.location.pathname === "/admin/tickets"
+              ? "tickets"
             : "dashboard",
       );
     }
@@ -1329,6 +1425,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
     const targetPath = {
       employees: "/admin/employees",
       requests: "/admin/requests",
+      tickets: "/admin/tickets",
       dashboard: "/admin/dashboard",
     }[tab];
     navigate(targetPath);
@@ -1481,6 +1578,19 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
               </div>
               <span className="sidebar-pill">{pendingRequests.length}</span>
             </button>
+
+            <button
+              className={`sidebar-nav-link ${activeTab === "tickets" ? "active" : ""}`}
+              onClick={() => {
+                navigateToTab("tickets");
+                setSidebarOpen(false);
+              }}
+            >
+              <div className="sidebar-nav-item-left">
+                <MailIcon size={18} />
+                <span>Ticket Management</span>
+              </div>
+            </button>
           </div>
         </div>
 
@@ -1540,7 +1650,9 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                   ? "Dashboard Overview"
                   : activeTab === "requests"
                     ? "Account Requests"
-                    : "Employee Records"}
+                    : activeTab === "tickets"
+                      ? "Ticket Management"
+                      : "Employee Records"}
               </span>
             </div>
           </div>
@@ -1664,6 +1776,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                   ? `Welcome back, ${(user.name || "there").split(" ")[0]}.`
                   : activeTab === "requests"
                     ? "Account requests"
+                    : activeTab === "tickets"
+                      ? "Ticket Management"
                     : "Employee directory"}
               </h1>
               <p className="page-description">
@@ -1671,6 +1785,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                   ? "A clear overview of your people, departments, and workspace."
                   : activeTab === "requests"
                     ? "Review employee account requests and choose whether to approve them."
+                    : activeTab === "tickets"
+                      ? "Review employee tickets, track status, and respond to support conversations."
                     : "Search, review, and manage your employee records in one place."}
               </p>
             </div>
@@ -2416,6 +2532,10 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
               )}
             </section>
           )}
+          <AdminTicketManagement
+            active={activeTab === "tickets"}
+            showToast={showToast}
+          />
         </main>
       </div>
 
@@ -2623,8 +2743,8 @@ function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSucc
   }
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal-card">
+    <div className="modal-backdrop employee-form-backdrop">
+      <div className="modal-card employee-form-modal">
         <div className="modal-header">
           <div>
             <h3>{isEdit ? "Edit Employee Details" : "Add New Employee"}</h3>
@@ -2639,8 +2759,8 @@ function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSucc
           </button>
         </div>
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body">
+        <form className="employee-form-content" onSubmit={handleSubmit}>
+          <div className="modal-body employee-form-scroll">
             {error && (
               <div className="toast-item error" style={{ minWidth: "auto", marginBottom: "1rem" }}>
                 <AlertCircleIcon size={18} />
@@ -3768,6 +3888,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
           </>
         )}
       </main>
+      <EmployeeTicketSupport profile={profile} showToast={showToast} />
     </div>
   );
 }

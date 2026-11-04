@@ -25,10 +25,13 @@ users_collection = db["users"]
 employees_collection = db["employees"]
 account_requests_collection = db["account_requests"]
 employee_invites_collection = db["employee_invites"]
+tickets_collection = db["tickets"]
+ticket_messages_collection = db["ticket_messages"]
+ticket_notifications_collection = db["ticket_notifications"]
 
 
 def init_db_indexes():
-    """Create unique indexes on email to prevent duplicate accounts."""
+    """Create indexes used by account and ticket collections."""
     try:
         users_collection.create_index("email", unique=True)
         employees_collection.create_index("email", unique=True)
@@ -40,6 +43,30 @@ def init_db_indexes():
         account_requests_collection.create_index("email", unique=True)
         employee_invites_collection.create_index("token_hash", unique=True)
         employee_invites_collection.create_index("expires_at", expireAfterSeconds=0)
+        tickets_collection.create_index("ticket_id", unique=True)
+        tickets_collection.create_index(
+            [("employee_id", 1), ("created_at", -1)]
+        )
+        tickets_collection.create_index(
+            [("status", 1), ("created_at", -1)]
+        )
+        tickets_collection.create_index("accepted_by")
+        ticket_messages_collection.create_index(
+            [("ticket_id", 1), ("timestamp", 1)]
+        )
+        ticket_notifications_collection.create_index(
+            "notification_id",
+            unique=True,
+        )
+        ticket_notifications_collection.create_index(
+            [
+                ("recipient_id", 1),
+                ("recipient_role", 1),
+                ("is_read", 1),
+                ("created_at", -1),
+            ]
+        )
+        ticket_notifications_collection.create_index("ticket_id")
         print("MongoDB indexes created successfully.")
     except Exception as e:
         print(f"[Warning] Could not create indexes: {e}")

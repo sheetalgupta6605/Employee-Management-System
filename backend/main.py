@@ -5,12 +5,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from admin_request_routes import router as admin_request_router
+from admin_ticket_routes import (
+    notification_router as admin_ticket_notification_router,
+    router as admin_ticket_router,
+)
 from auth_routes import router as auth_router
 from database import client, db, init_db_indexes
 from employee_routes import router as employee_router
 from employee_services import initialize_employee_ids, migrate_legacy_account_requests
 from invitation_routes import router as invitation_router
 from settings import ALLOWED_ORIGINS
+from ticket_routes import router as ticket_router
 
 load_dotenv()
 
@@ -42,7 +47,10 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(invitation_router)
 app.include_router(admin_request_router)
+app.include_router(admin_ticket_router)
+app.include_router(admin_ticket_notification_router)
 app.include_router(employee_router)
+app.include_router(ticket_router)
 
 
 @app.get("/")
