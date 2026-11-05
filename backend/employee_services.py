@@ -60,49 +60,63 @@ def next_employee_id() -> str:
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
-    return str(counter["value"])
+    return f"W-{counter['value']}"
 
 
-def initialize_employee_ids() -> None:
-    """Convert old EMP-prefixed IDs and assign sequential IDs to legacy records."""
-    employee_ids = list(employees_collection.find({}, {"employee_id": 1}))
-    highest_id = 0
-    for employee in employee_ids:
-        employee_id = str(employee.get("employee_id", ""))
-        match = re.fullmatch(r"(?:EMP-)?(\d+)", employee_id, re.IGNORECASE)
-        if match:
-            highest_id = max(highest_id, int(match.group(1)))
+_EMPLOYEE_NUMBER = re.compile(r"(?:W-|EMP-)?(\d+)$", re.IGNORECASE)
+
+
+def _employee_number(employee: dict) -> int | None:
+    match = _EMPLOYEE_NUMBER.fullmatch(str(employee.get("employee_id", "")).strip())
+    return int(match.group(1)) if match else None
+
+
+def _migrate_ticket_employee_references(employee: dict) -> None:
+    old_id = str(employee.get("employee_id", "")).strip()
+    stable_id = str(employee["_id"])
+    if old_id and old_id != stable_id:
+        db["tickets"].update_many(
+            {"employee_id": old_id},
+            {"$set": {"employee_id": stable_id}},
+        )
+
+
+def compact_employee_ids() -> None:
+    """Keep employee IDs sequential and preserve stable ticket ownership links."""
+    employees = list(employees_collection.find({}))
+    employees.sort(
+        key=lambda employee: (
+            0 if _employee_number(employee) is not None else 1,
+            _employee_number(employee) if _employee_number(employee) is not None else 0,
+            str(employee["_id"]),
+        )
+    )
+    for employee in employees:
+        _migrate_ticket_employee_references(employee)
+
+    # Temporary unique values avoid collisions while shifting IDs under the
+    # existing unique employee_id index.
+    for employee in employees:
+        employees_collection.update_one(
+            {"_id": employee["_id"]},
+            {"$set": {"employee_id": f"__WID_TEMP__{employee['_id']}"}},
+        )
+    for number, employee in enumerate(employees, start=1):
+        employees_collection.update_one(
+            {"_id": employee["_id"]},
+            {"$set": {"employee_id": f"W-{number}"}},
+        )
 
     db["counters"].update_one(
         {"_id": "employee_id"},
-        {"$max": {"value": highest_id}},
+        {"$set": {"value": len(employees)}},
         upsert=True,
     )
 
-    for employee in employee_ids:
-        employee_id = str(employee.get("employee_id", ""))
-        match = re.fullmatch(r"EMP-(\d+)", employee_id, re.IGNORECASE)
-        if match:
-            employees_collection.update_one(
-                {"_id": employee["_id"], "employee_id": employee_id},
-                {"$set": {"employee_id": str(int(match.group(1)))}},
-            )
 
-    missing_ids = employees_collection.find(
-        {
-            "$or": [
-                {"employee_id": {"$exists": False}},
-                {"employee_id": None},
-                {"employee_id": ""},
-            ]
-        },
-        {"_id": 1},
-    )
-    for employee in missing_ids:
-        employees_collection.update_one(
-            {"_id": employee["_id"], "employee_id": {"$in": [None, ""]}},
-            {"$set": {"employee_id": next_employee_id()}},
-        )
+def initialize_employee_ids() -> None:
+    """Migrate legacy employee IDs to compact W-number IDs during startup."""
+    compact_employee_ids()
 
 
 def migrate_legacy_account_requests() -> None:
@@ -178,12 +192,13 @@ def get_linked_employee(current_user: dict) -> dict:
 
 
 def get_employee_by_id(employee_id: str) -> dict:
-    """Fetch an employee by numeric employee ID or legacy MongoDB ID."""
+    """Fetch an employee by W-number employee ID or legacy MongoDB ID."""
     normalized_id = employee_id.strip().upper()
-    if re.fullmatch(r"(?:EMP-)?\d+", normalized_id):
-        numeric_id = normalized_id.removeprefix("EMP-")
+    match = _EMPLOYEE_NUMBER.fullmatch(normalized_id)
+    if match:
+        numeric_id = int(match.group(1))
         employee = employees_collection.find_one(
-            {"employee_id": str(int(numeric_id))}
+            {"employee_id": f"W-{numeric_id}"}
         )
     elif ObjectId.is_valid(employee_id):
         employee = employees_collection.find_one({"_id": ObjectId(employee_id)})

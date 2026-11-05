@@ -12,6 +12,7 @@ from database import (
     users_collection,
 )
 from employee_services import (
+    compact_employee_ids,
     employee_account_info,
     get_employee_by_id,
     get_linked_employee,
@@ -301,6 +302,7 @@ def delete_employee(employee_id: str, current_user: dict = Depends(require_admin
         {"email": normalize_email(str(employee["email"]))}
     )
     employees_collection.delete_one({"_id": object_id})
+    compact_employee_ids()
     return {"message": "Employee and linked login account deleted successfully"}
 
 

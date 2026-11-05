@@ -28,6 +28,8 @@ employee_invites_collection = db["employee_invites"]
 tickets_collection = db["tickets"]
 ticket_messages_collection = db["ticket_messages"]
 ticket_notifications_collection = db["ticket_notifications"]
+attendance_collection = db["attendance"]
+leave_requests_collection = db["attendance_leave_requests"]
 
 
 def init_db_indexes():
@@ -67,6 +69,10 @@ def init_db_indexes():
             ]
         )
         ticket_notifications_collection.create_index("ticket_id")
+        attendance_collection.create_index([("employee_id", 1), ("date", 1)], unique=True)
+        attendance_collection.create_index("date")
+        leave_requests_collection.create_index([("employee_id", 1), ("created_at", -1)])
+        leave_requests_collection.create_index([("status", 1), ("date", 1)])
         print("MongoDB indexes created successfully.")
     except Exception as e:
         print(f"[Warning] Could not create indexes: {e}")

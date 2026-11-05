@@ -9,11 +9,12 @@ from admin_ticket_routes import (
     notification_router as admin_ticket_notification_router,
     router as admin_ticket_router,
 )
+from attendance_routes import router as attendance_router
 from auth_routes import router as auth_router
 from database import client, db, init_db_indexes
 from document_routes import router as document_router
 from employee_routes import router as employee_router
-from employee_services import initialize_employee_ids, migrate_legacy_account_requests
+from employee_services import compact_employee_ids, initialize_employee_ids, migrate_legacy_account_requests
 from invitation_routes import router as invitation_router
 from ocr_routes import router as ocr_router
 from settings import ALLOWED_ORIGINS
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
         init_db_indexes()
         initialize_employee_ids()
         migrate_legacy_account_requests()
+        compact_employee_ids()
     except Exception as error:
         print(f"[Warning] Could not connect to MongoDB at startup: {error}")
         print("Server will still start. Check your MONGO_URL and your MongoDB Atlas IP whitelist.")
@@ -55,6 +57,7 @@ app.include_router(employee_router)
 app.include_router(document_router)
 app.include_router(ocr_router)
 app.include_router(ticket_router)
+app.include_router(attendance_router)
 
 
 @app.get("/")

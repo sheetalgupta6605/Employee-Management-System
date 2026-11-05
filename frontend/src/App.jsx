@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { api, clearToken, getToken, saveToken, downloadFile, saveFileAs } from "./api";
 import AdminTicketManagement from "./AdminTicketManagement";
 import EmployeeTicketSupport from "./EmployeeTicketSupport";
+import { AdminAttendance, EmployeeAttendanceSummary } from "./AttendanceManagement";
 import "./App.css";
 
 // ==========================================================================
@@ -35,6 +36,10 @@ function BuildingIcon({ size = 18, className = "" }) {
       <path d="M8 14h.01" />
     </svg>
   );
+}
+
+function CalendarIcon({ size = 18, className = "" }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></svg>;
 }
 
 function SearchIcon({ size = 18, className = "" }) {
@@ -612,7 +617,7 @@ export default function App() {
 
     const isAdminEmployeeDetailPath = /^\/admin\/employees\/[^/]+$/.test(pathname);
     const allowedPaths = user.role === "admin"
-      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests", "/admin/tickets", "/admin/settings"]
+      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests", "/admin/tickets", "/admin/attendance", "/admin/settings"]
       : ["/employee", "/employee/dashboard"];
 
     if (!allowedPaths.includes(pathname) && !(user.role === "admin" && isAdminEmployeeDetailPath)) {
@@ -1304,6 +1309,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
         ? "requests"
         : window.location.pathname === "/admin/tickets"
           ? "tickets"
+        : window.location.pathname === "/admin/attendance"
+          ? "attendance"
           : window.location.pathname === "/admin/settings"
             ? "settings"
         : "dashboard",
@@ -1431,6 +1438,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
             ? "requests"
             : window.location.pathname === "/admin/tickets"
               ? "tickets"
+              : window.location.pathname === "/admin/attendance"
+                ? "attendance"
               : window.location.pathname === "/admin/settings"
                 ? "settings"
             : "dashboard",
@@ -1484,6 +1493,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
       employees: "/admin/employees",
       requests: "/admin/requests",
       tickets: "/admin/tickets",
+      attendance: "/admin/attendance",
       settings: "/admin/settings",
       dashboard: "/admin/dashboard",
     }[tab];
@@ -1740,6 +1750,13 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
             </button>
 
             <button
+              className={`sidebar-nav-link ${activeTab === "attendance" ? "active" : ""}`}
+              onClick={() => { navigateToTab("attendance"); setSidebarOpen(false); }}
+            >
+              <div className="sidebar-nav-item-left"><CalendarIcon size={18} /><span>Attendance</span></div>
+            </button>
+
+            <button
               className={`sidebar-nav-link ${activeTab === "settings" ? "active" : ""}`}
               onClick={() => {
                 navigateToTab("settings");
@@ -1804,6 +1821,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                     ? "Account Requests"
                     : activeTab === "tickets"
                       ? "Ticket Management"
+                    : activeTab === "attendance"
+                      ? "Attendance"
                       : activeTab === "settings"
                         ? "Settings"
                         : "Employee Records"}
@@ -1945,12 +1964,16 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                     ? "Review employee account requests and choose whether to approve them."
                     : activeTab === "tickets"
                       ? "Review employee tickets, track status, and respond to support conversations."
+                    : activeTab === "attendance"
+                      ? "Record daily attendance and review monthly attendance reports."
                       : activeTab === "settings"
                         ? "Manage your personal information and account security."
                         : "Search, review, and manage your employee records in one place."}
               </p>
             </div>
           </section>
+
+          {activeTab === "attendance" && <AdminAttendance showToast={showToast} />}
 
           {/* Stat Cards */}
           {activeTab === "dashboard" && <section className="stats-grid">
@@ -3971,6 +3994,8 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
             Last Session: {new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
           </div>
         </section>
+
+        {employeeView === "welcome" && <EmployeeAttendanceSummary showToast={showToast} />}
 
         {employeeView === "settings" && (
           <nav className="employee-portal-nav" aria-label="Settings sections">

@@ -43,7 +43,7 @@ def _serialize_ticket(ticket: dict) -> dict:
 
 
 def _employee_identity(employee: dict, current_user: dict) -> tuple[str, str]:
-    employee_id = str(employee.get("employee_id") or employee["_id"])
+    employee_id = str(employee["_id"])
     employee_name = str(employee.get("name") or current_user.get("name") or "")
     return employee_id, employee_name
 
@@ -98,7 +98,7 @@ def create_ticket(
 ):
     employee = get_linked_employee(current_user)
     now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
-    employee_id = str(employee.get("employee_id") or employee["_id"])
+    employee_id = str(employee["_id"])
     employee_name = str(employee.get("name") or current_user.get("name") or "")
     employee_email = str(employee.get("email") or current_user.get("email") or "")
 

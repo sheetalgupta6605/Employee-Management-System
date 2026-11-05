@@ -11,7 +11,7 @@ from database import (
     employees_collection,
     users_collection,
 )
-from employee_services import next_employee_id
+from employee_services import compact_employee_ids, next_employee_id
 
 router = APIRouter()
 
@@ -106,10 +106,12 @@ def approve_account_request(
         except DuplicateKeyError as error:
             if created_employee_id is not None:
                 employees_collection.delete_one({"_id": created_employee_id})
+                compact_employee_ids()
             raise HTTPException(status_code=409, detail="An account with this email already exists") from error
         except Exception:
             if created_employee_id is not None:
                 employees_collection.delete_one({"_id": created_employee_id})
+                compact_employee_ids()
             raise
 
         account_requests_collection.delete_one({"_id": request["_id"]})
@@ -150,5 +152,7 @@ def decline_account_request(
     users_collection.delete_one({"_id": account["_id"], "status": "pending"})
     employee_id = account.get("employee_id")
     if account.get("created_profile") and employee_id and ObjectId.is_valid(employee_id):
-        employees_collection.delete_one({"_id": ObjectId(employee_id)})
+        result = employees_collection.delete_one({"_id": ObjectId(employee_id)})
+        if result.deleted_count:
+            compact_employee_ids()
     return {"message": f"Account request for {account.get('name', account['email'])} was declined."}

@@ -16,7 +16,7 @@ from database import (
     users_collection,
 )
 from email_service import send_employee_invite_email
-from employee_services import next_employee_id, normalize_email
+from employee_services import compact_employee_ids, next_employee_id, normalize_email
 from models import EmployeeCreate, EmployeeInviteComplete
 
 load_dotenv()
@@ -171,6 +171,7 @@ def complete_employee_invite(token: str, payload: EmployeeInviteComplete):
             users_collection.delete_one({"_id": account_id})
         if employee_id is not None:
             employees_collection.delete_one({"_id": employee_id})
+            compact_employee_ids()
         employee_invites_collection.update_one(
             {"_id": invite["_id"]},
             {"$unset": {"claimed_at": ""}},
@@ -181,6 +182,7 @@ def complete_employee_invite(token: str, payload: EmployeeInviteComplete):
             users_collection.delete_one({"_id": account_id})
         if employee_id is not None:
             employees_collection.delete_one({"_id": employee_id})
+            compact_employee_ids()
         employee_invites_collection.update_one(
             {"_id": invite["_id"]},
             {"$unset": {"claimed_at": ""}},
