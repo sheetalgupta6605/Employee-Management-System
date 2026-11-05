@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Employee Management System", lifespan=lifespan)
+app = FastAPI(title="Workify", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -59,7 +59,7 @@ app.include_router(ticket_router)
 
 @app.get("/")
 def home():
-    return {"message": "Employee Management System API is running!"}
+    return {"message": "Workify API is running!"}
 
 
 @app.get("/db-check")

@@ -906,7 +906,7 @@ function LoginPage({ onLogin }) {
             <UsersIcon size={24} />
           </div>
           <div>
-            <div className="auth-single-brand-title">Employee Management</div>
+            <div className="auth-single-brand-title">Workify</div>
             <div className="auth-single-brand-caption">Your people workspace</div>
           </div>
         </div>
@@ -1144,7 +1144,7 @@ function AcceptEmployeeInvite({ token, onLogin }) {
         <div className="auth-single-brand">
           <div className="brand-icon-box"><UsersIcon size={24} /></div>
           <div>
-            <div className="auth-single-brand-title">Employee Management</div>
+            <div className="auth-single-brand-title">Workify</div>
             <div className="auth-single-brand-caption">Complete your employee account</div>
           </div>
         </div>
@@ -1663,7 +1663,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                 <BuildingIcon size={20} />
               </div>
               <span className="sidebar-brand-name" style={{ fontSize: "0.95rem" }}>
-                Employee Management System
+                Workify
               </span>
             </div>
             {/* Close button for mobile */}
@@ -1777,14 +1777,6 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                 <div className="sidebar-user-role">System Admin</div>
               </div>
             </div>
-            <button
-              className="btn-icon"
-              onClick={onLogout}
-              title="Sign Out"
-              style={{ color: "#cbd5e1" }}
-            >
-              <LogOutIcon size={18} />
-            </button>
           </div>
         </div>
       </aside>
@@ -3904,7 +3896,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
               <UsersIcon size={18} />
             </div>
             <span style={{ fontWeight: 700, fontSize: "1rem", color: "#0f172a" }}>
-              Employee Management System — Employee Portal
+              Workify — Employee Portal
             </span>
           </div>
         </div>

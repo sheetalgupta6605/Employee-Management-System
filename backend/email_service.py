@@ -36,13 +36,13 @@ def send_employee_invite_email(email: str, name: str, invite_url: str) -> None:
         )
 
     message = EmailMessage()
-    message["Subject"] = "Complete your Employee Management System account"
+    message["Subject"] = "Complete your Workify account"
     message["From"] = sender
     message["To"] = email
     message.set_content(
         f"""Hello {name},
 
-You have been invited to join the Employee Management System.
+You have been invited to join Workify.
 
 Complete your profile and choose a password using this one-time invitation link:
 {invite_url}
