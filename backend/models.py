@@ -61,6 +61,16 @@ class ResumeUpload(BaseModel):
     file_data: str
 
 
+class EmployeeDocumentUpload(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    file_data: str = Field(min_length=1, max_length=14_000_000)
+    document_label: str = Field(min_length=1, max_length=100)
+
+
+class EmployeeDocumentLabelUpdate(BaseModel):
+    document_label: str = Field(min_length=1, max_length=100)
+
+
 class ProfilePhotoUpload(BaseModel):
     file_data: str = Field(min_length=1)
 

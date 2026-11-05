@@ -11,9 +11,11 @@ from admin_ticket_routes import (
 )
 from auth_routes import router as auth_router
 from database import client, db, init_db_indexes
+from document_routes import router as document_router
 from employee_routes import router as employee_router
 from employee_services import initialize_employee_ids, migrate_legacy_account_requests
 from invitation_routes import router as invitation_router
+from ocr_routes import router as ocr_router
 from settings import ALLOWED_ORIGINS
 from ticket_routes import router as ticket_router
 
@@ -50,6 +52,8 @@ app.include_router(admin_request_router)
 app.include_router(admin_ticket_router)
 app.include_router(admin_ticket_notification_router)
 app.include_router(employee_router)
+app.include_router(document_router)
+app.include_router(ocr_router)
 app.include_router(ticket_router)
 
 

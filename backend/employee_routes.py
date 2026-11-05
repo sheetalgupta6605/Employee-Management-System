@@ -27,14 +27,17 @@ from models import (
     ResumeUpload,
     SetPassword,
 )
-from settings import RESUMES_DIR
+from settings import OCR_UPLOADS_DIR, RESUMES_DIR
 
 router = APIRouter()
 
 
 @router.get("/employees/me")
 def get_my_employee_profile(current_user: dict = Depends(require_employee)):
-    return serialize_employee(get_linked_employee(current_user))
+    result = serialize_employee(get_linked_employee(current_user))
+    result.pop("documents", None)
+    result.pop("ocr_result", None)
+    return result
 
 
 @router.put("/employees/me")
@@ -60,7 +63,10 @@ def update_my_employee_profile(
         {"$set": {"name": data["name"], "email": data["email"]}},
     )
 
-    return serialize_employee(employees_collection.find_one({"_id": employee["_id"]}))
+    result = serialize_employee(employees_collection.find_one({"_id": employee["_id"]}))
+    result.pop("documents", None)
+    result.pop("ocr_result", None)
+    return result
 
 
 @router.put("/employees/me/password")
@@ -202,6 +208,9 @@ def get_all_employees(current_user: dict = Depends(require_admin)):
     for employee in employees_collection.find():
         account_info = employee_account_info(employee)
         serialized = serialize_employee(employee)
+        legacy_ocr = serialized.pop("ocr_result", None) or {}
+        saved_documents = serialized.pop("documents", [])
+        serialized["document_count"] = len(saved_documents) or int(bool(legacy_ocr.get("source_stored_name")))
         serialized["account_status"] = account_info["status"]
         serialized["deactivated_until"] = account_info["deactivated_until"]
         email = normalize_email(str(serialized["email"]))
@@ -269,6 +278,23 @@ def delete_employee(employee_id: str, current_user: dict = Depends(require_admin
                 os.remove(resume_path)
             except OSError:
                 pass
+
+    ocr_result = employee.get("ocr_result") or {}
+    for key in ("source_stored_name", "text_stored_name"):
+        stored_name = ocr_result.get(key)
+        if stored_name and os.path.basename(stored_name) == stored_name:
+            try:
+                os.remove(os.path.join(OCR_UPLOADS_DIR, stored_name))
+            except OSError:
+                pass
+    for document in employee.get("documents", []):
+        stored_names = [document.get("source_stored_name"), (document.get("ocr_result") or {}).get("text_stored_name")]
+        for stored_name in stored_names:
+            if stored_name and os.path.basename(stored_name) == stored_name:
+                try:
+                    os.remove(os.path.join(OCR_UPLOADS_DIR, stored_name))
+                except OSError:
+                    pass
 
     users_collection.delete_many({"employee_id": str(object_id)})
     account_requests_collection.delete_many(

@@ -8,10 +8,14 @@ function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "—"
-    : date.toLocaleString(undefined, {
+    : date.toLocaleDateString(undefined, {
         dateStyle: "medium",
-        timeStyle: "short",
+        timeZone: "Asia/Kolkata",
       });
+}
+
+function formatTicketId(ticketId) {
+  return String(ticketId || "").replace(/^(TKT-)0+(\d+)$/i, "$1$2");
 }
 
 function statusClass(status = "") {
@@ -38,7 +42,7 @@ function historyActor(ticket, entry) {
   return entry.changed_by_role === "admin" ? "Admin" : ticket.employee_name;
 }
 
-export default function AdminTicketManagement({ active, showToast }) {
+export default function AdminTicketManagement({ active, showToast, onUnseenCountChange }) {
   const [tickets, setTickets] = useState([]);
   const [allTickets, setAllTickets] = useState([]);
   const [filter, setFilter] = useState("All Tickets");
@@ -161,6 +165,13 @@ export default function AdminTicketManagement({ active, showToast }) {
       ),
     [notifications],
   );
+  const unseenTicketCount = useMemo(
+    () => ticketRaisedNotifications.filter((notification) => !notification.is_read).length,
+    [ticketRaisedNotifications],
+  );
+  useEffect(() => {
+    onUnseenCountChange?.(unseenTicketCount);
+  }, [onUnseenCountChange, unseenTicketCount]);
   const popupNotification = useMemo(
     () =>
       ticketRaisedNotifications.find(
@@ -193,11 +204,27 @@ export default function AdminTicketManagement({ active, showToast }) {
     );
   }
 
-  function openTicket(ticket) {
+  async function markTicketNotificationsRead(ticketId) {
+    const unreadForTicket = ticketRaisedNotifications.filter(
+      (notification) => notification.ticket_id === ticketId && !notification.is_read,
+    );
+    if (!unreadForTicket.length) return;
+    await Promise.allSettled(
+      unreadForTicket.map((notification) =>
+        api(`/admin/ticket-notifications/${encodeURIComponent(notification.notification_id)}/read`, {
+          method: "PATCH",
+        }),
+      ),
+    );
+    await loadNotifications();
+  }
+
+  async function openTicket(ticket) {
     setMessages([]);
     setMessageDraft("");
     setDetailError("");
     setSelectedTicket(ticket);
+    await markTicketNotificationsRead(ticket.ticket_id);
   }
 
   function closeTicketDetails() {
@@ -210,7 +237,7 @@ export default function AdminTicketManagement({ active, showToast }) {
       const ticket = await api(
         `/admin/tickets/${encodeURIComponent(notification.ticket_id)}`,
       );
-      openTicket(ticket);
+      await openTicket(ticket);
       watchNotificationLater(notification);
     } catch (error) {
       showToast(error.message || "Could not open ticket.", "error");
@@ -249,8 +276,11 @@ export default function AdminTicketManagement({ active, showToast }) {
           item.ticket_id === updated.ticket_id ? updated : item,
         ),
       );
+      if (status === "Accepted") {
+        await markTicketNotificationsRead(updated.ticket_id);
+      }
       await Promise.all([loadTickets(), loadNotifications()]);
-      showToast(`Ticket ${updated.ticket_id} updated to ${updated.status}.`, "success");
+      showToast(`Ticket ${formatTicketId(updated.ticket_id)} updated to ${updated.status}.`, "success");
       return true;
     } catch (error) {
       showToast(error.message || "Ticket could not be updated.", "error");
@@ -327,7 +357,7 @@ export default function AdminTicketManagement({ active, showToast }) {
           <div className="panel-card-header">
             <div className="panel-title-group admin-ticket-page-header">
               <h2>Ticket Management</h2>
-              <p>Review requests, coordinate with employees, and track progress.</p>
+              {/* <p>Review requests, coordinate with employees, and track progress.</p> */}
             </div>
             <button type="button" className="btn btn-secondary" onClick={loadTickets}>
               Refresh tickets
@@ -384,7 +414,7 @@ export default function AdminTicketManagement({ active, showToast }) {
                 return (
                   <article className="admin-ticket-notification-row" key={notification.notification_id}>
                     <div>
-                      <strong>{employeeName || "Employee"} — {notification.ticket_id}</strong>
+                      <strong>{employeeName || "Employee"} — {formatTicketId(notification.ticket_id)}</strong>
                       <p>{ticket?.description || notification.message}</p>
                       <time dateTime={notification.created_at}>{formatDate(notification.created_at)}</time>
                     </div>
@@ -431,7 +461,7 @@ export default function AdminTicketManagement({ active, showToast }) {
                 <tbody>
                   {tickets.map((ticket) => (
                     <tr key={ticket.ticket_id}>
-                      <td><strong className="admin-ticket-id">{ticket.ticket_id}</strong></td>
+                      <td><strong className="admin-ticket-id">{formatTicketId(ticket.ticket_id)}</strong></td>
                       <td className="admin-ticket-employee-cell">{ticket.employee_name}</td>
                       <td title={ticket.description}>
                         <span className="admin-ticket-description-cell">{ticket.description}</span>
@@ -490,8 +520,8 @@ export default function AdminTicketManagement({ active, showToast }) {
                 <div className="admin-ticket-action-content">
                   <p>
                     {pendingAction.status === "Accepted"
-                      ? `This will accept ticket ${selectedTicket.ticket_id} and notify the employee.`
-                      : `This will decline ticket ${selectedTicket.ticket_id} and notify the employee.`}
+                      ? `This will accept ticket ${formatTicketId(selectedTicket.ticket_id)} and notify the employee.`
+                      : `This will decline ticket ${formatTicketId(selectedTicket.ticket_id)} and notify the employee.`}
                   </p>
                   {pendingAction.status === "Declined" && (
                     <label className="admin-ticket-decline-field">
@@ -541,7 +571,7 @@ export default function AdminTicketManagement({ active, showToast }) {
             <button
               type="button"
               className="admin-ticket-toast-main"
-              aria-label={`View ticket ${popupNotification.ticket_id} from ${popupTicket?.employee_name || "employee"}`}
+              aria-label={`View ticket ${formatTicketId(popupNotification.ticket_id)} from ${popupTicket?.employee_name || "employee"}`}
               onClick={() => void viewNotification(popupNotification)}
             >
               <span className="admin-ticket-toast-heading">
@@ -552,7 +582,7 @@ export default function AdminTicketManagement({ active, showToast }) {
                 {popupTicket?.employee_name || "Employee"}
               </span>
               <span className="admin-ticket-toast-id">
-                Ticket {popupNotification.ticket_id}
+                Ticket {formatTicketId(popupNotification.ticket_id)}
               </span>
               <span className="admin-ticket-toast-description">
                 {popupTicket?.description || popupNotification.message}
@@ -595,7 +625,7 @@ export default function AdminTicketManagement({ active, showToast }) {
               <div>
                 <p className="page-eyebrow">EMPLOYEE SUPPORT</p>
                 <div className="admin-ticket-detail-title-row">
-                  <h3 id="admin-ticket-detail-title">{selectedTicket.ticket_id}</h3>
+                  <h3 id="admin-ticket-detail-title">{formatTicketId(selectedTicket.ticket_id)}</h3>
                   <span className={`admin-ticket-status ${statusClass(selectedTicket.status)}`}>
                     {selectedTicket.status}
                   </span>
@@ -686,7 +716,7 @@ export default function AdminTicketManagement({ active, showToast }) {
                           <time dateTime={item.changed_at || undefined}>
                             {formatDate(item.changed_at)}
                           </time>
-                          {item.note && item.status !== "Pending" && <p>{item.note}</p>}
+                          {item.note && !["Pending", "Accepted", "In Progress"].includes(item.status) && <p>{item.note}</p>}
                         </li>
                       ))}
                     </ol>

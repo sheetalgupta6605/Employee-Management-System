@@ -53,6 +53,36 @@ export async function downloadFile(path) {
   window.open(blobUrl, "_blank");
 }
 
+export async function getFileBlob(path) {
+  const token = getToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  let response;
+  try {
+    response = await fetch(getEndpointUrl(path), { headers });
+  } catch {
+    throw new Error(
+      "Cannot connect to the backend. Make sure FastAPI is running at " + API_URL,
+    );
+  }
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(errorData?.detail || `Failed to load document (${response.status})`);
+  }
+  return response.blob();
+}
+
+export async function saveFileAs(path, filename) {
+  const blob = await getFileBlob(path);
+  const blobUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+}
+
 export async function api(path, options = {}) {
   const headers = {
     ...options.headers,

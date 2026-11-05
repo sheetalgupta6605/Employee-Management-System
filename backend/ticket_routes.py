@@ -34,7 +34,7 @@ def _next_ticket_id() -> str:
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
-    return f"TKT-{counter['value']:06d}"
+    return f"TKT-{counter['value']}"
 
 
 def _serialize_ticket(ticket: dict) -> dict:

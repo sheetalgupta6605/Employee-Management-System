@@ -51,10 +51,14 @@ function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? "—"
-    : date.toLocaleString(undefined, {
+    : date.toLocaleDateString(undefined, {
         dateStyle: "medium",
-        timeStyle: "short",
+        timeZone: "Asia/Kolkata",
       });
+}
+
+function formatTicketId(ticketId) {
+  return String(ticketId || "").replace(/^(TKT-)0+(\d+)$/i, "$1$2");
 }
 
 function latestAdminResponse(ticket) {
@@ -66,7 +70,7 @@ function latestAdminResponse(ticket) {
   );
 }
 
-export default function EmployeeTicketSupport({ profile, showToast }) {
+export default function EmployeeTicketSupport({ profile, showToast, onLogout }) {
   const [isOpen, setIsOpen] = useState(false);
   const [section, setSection] = useState("home");
   const [phone, setPhone] = useState(profile.contact_number || "");
@@ -74,6 +78,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
   const [submitting, setSubmitting] = useState(false);
   const [tickets, setTickets] = useState([]);
   const [filter, setFilter] = useState("All");
+  const [expandedTicketId, setExpandedTicketId] = useState(null);
   const [ticketsLoading, setTicketsLoading] = useState(false);
   const [ticketsError, setTicketsError] = useState("");
   const [activeTicket, setActiveTicket] = useState(null);
@@ -85,6 +90,15 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
   const [closingTicket, setClosingTicket] = useState(false);
   const [formError, setFormError] = useState("");
   const messageListRef = useRef(null);
+  const sessionHandlersRef = useRef({ onLogout, showToast });
+  sessionHandlersRef.current = { onLogout, showToast };
+
+  const handleEmployeeAccessError = useCallback((error) => {
+    if (error?.status !== 403 || error.message !== "Employee access required") return false;
+    sessionHandlersRef.current.onLogout?.();
+    sessionHandlersRef.current.showToast("Your current session does not have employee access. Sign in again with your employee account.", "error");
+    return true;
+  }, []);
 
   const loadTickets = useCallback(async () => {
     setTicketsLoading(true);
@@ -94,11 +108,12 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
       const result = await api(`/tickets/my${query}`);
       setTickets(Array.isArray(result) ? result : []);
     } catch (error) {
+      if (handleEmployeeAccessError(error)) return;
       setTicketsError(error.message || "Could not load your tickets.");
     } finally {
       setTicketsLoading(false);
     }
-  }, [filter]);
+  }, [filter, handleEmployeeAccessError]);
 
   useEffect(() => {
     if (section !== "tickets") return undefined;
@@ -130,7 +145,9 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
           setMessagesError("");
         }
       } catch (error) {
-        if (active) setMessagesError(error.message || "Could not load messages.");
+        if (active && !handleEmployeeAccessError(error)) {
+          setMessagesError(error.message || "Could not load messages.");
+        }
       } finally {
         if (active && initial) setMessagesLoading(false);
       }
@@ -142,7 +159,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [section, activeTicket]);
+  }, [section, activeTicket, handleEmployeeAccessError]);
 
   useEffect(() => {
     if (section === "chat" && messageListRef.current) {
@@ -171,10 +188,11 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
       });
       setDescription("");
       setFormError("");
-      showToast(`Ticket ${ticket.ticket_id} was submitted.`, "success");
+      showToast(`Ticket ${formatTicketId(ticket.ticket_id)} was submitted.`, "success");
       setFilter("All");
       setSection("tickets");
     } catch (error) {
+      if (handleEmployeeAccessError(error)) return;
       setFormError(error.message || "Ticket could not be submitted.");
     } finally {
       setSubmitting(false);
@@ -197,6 +215,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
       setMessages((current) => [...current, sent]);
       setMessageDraft("");
     } catch (error) {
+      if (handleEmployeeAccessError(error)) return;
       setMessagesError(error.message || "Message could not be sent.");
     } finally {
       setSendingMessage(false);
@@ -205,7 +224,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
 
   async function handleCloseTicket(ticket) {
     const confirmed = window.confirm(
-      `Close ticket ${ticket.ticket_id}? You will not be able to send more messages.`,
+      `Close ticket ${formatTicketId(ticket.ticket_id)}? You will not be able to send more messages.`,
     );
     if (!confirmed) return;
 
@@ -221,8 +240,9 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
         ),
       );
       setActiveTicket(updated);
-      showToast(`Ticket ${updated.ticket_id} is closed.`, "success");
+      showToast(`Ticket ${formatTicketId(updated.ticket_id)} is closed.`, "success");
     } catch (error) {
+      if (handleEmployeeAccessError(error)) return;
       showToast(error.message || "Ticket could not be closed.", "error");
     } finally {
       setClosingTicket(false);
@@ -269,7 +289,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
                       ? "Raise a ticket"
                       : section === "tickets"
                         ? "Track my tickets"
-                        : activeTicket?.ticket_id || "Ticket conversation"}
+                        : formatTicketId(activeTicket?.ticket_id) || "Ticket conversation"}
                 </h2>
               </div>
             </div>
@@ -383,7 +403,7 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
                 tickets.map((ticket) => (
                   <article className="employee-ticket-card" key={ticket.ticket_id}>
                     <div className="employee-ticket-card-top">
-                      <strong>{ticket.ticket_id}</strong>
+                      <strong>{formatTicketId(ticket.ticket_id)}</strong>
                       <span className={`employee-ticket-status ${ticket.status.toLowerCase().replaceAll(" ", "-")}`}>
                         {ticket.status}
                       </span>
@@ -409,6 +429,14 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
                       <button
                         type="button"
                         className="btn btn-secondary"
+                        aria-expanded={expandedTicketId === ticket.ticket_id}
+                        onClick={() => setExpandedTicketId((current) => current === ticket.ticket_id ? null : ticket.ticket_id)}
+                      >
+                        {expandedTicketId === ticket.ticket_id ? "Hide Details" : "View Details"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
                         onClick={() => openConversation(ticket)}
                       >
                         <ChatIcon />
@@ -425,9 +453,33 @@ export default function EmployeeTicketSupport({ profile, showToast }) {
                         </button>
                       )}
                       {ticket.status === "Closed" && (
-                        <span className="employee-ticket-closed">Ticket Closed</span>
+                        <span className="employee-ticket-closed">Closed · chat history available</span>
                       )}
                     </div>
+                    {expandedTicketId === ticket.ticket_id && (
+                      <div className="employee-ticket-expanded-details">
+                        {/* <dl className="employee-ticket-expanded-meta">
+                          <div><dt>Phone number</dt><dd>{ticket.employee_phone || "—"}</dd></div>
+                          <div><dt>Last updated</dt><dd>{formatDate(ticket.updated_at)}</dd></div>
+                          <div><dt>Current status</dt><dd>{ticket.status}</dd></div>
+                        </dl> */}
+                        {ticket.status_history?.length > 0 && (
+                          <div className="employee-ticket-history">
+                            <strong>Status history</strong>
+                            {[...ticket.status_history].reverse().map((event, index) => (
+                              <div className="employee-ticket-history-item" key={`${event.changed_at}-${index}`}>
+                                <span>{event.status}</span>
+                                <span>{event.note || event.changed_by}</span>
+                                <time>{formatDate(event.changed_at)}</time>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <button type="button" className="employee-ticket-open-chat" onClick={() => openConversation(ticket)}>
+                          <ChatIcon /> Open conversation
+                        </button>
+                      </div>
+                    )}
                   </article>
                 ))
               )}

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { api, clearToken, getToken, saveToken, downloadFile } from "./api";
+import { api, clearToken, getToken, saveToken, downloadFile, saveFileAs } from "./api";
 import AdminTicketManagement from "./AdminTicketManagement";
 import EmployeeTicketSupport from "./EmployeeTicketSupport";
 import "./App.css";
@@ -279,8 +279,11 @@ function ProfilePhotoControl({
   onUpload,
   onRemove,
   large = false,
+  previewOnClick = false,
+  previewVariant = "",
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const inputRef = useRef(null);
   const controlRef = useRef(null);
 
@@ -307,15 +310,30 @@ function ProfilePhotoControl({
     };
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!previewOpen) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setPreviewOpen(false);
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [previewOpen]);
+
   return (
     <div className="photo-upload-control" ref={controlRef}>
       <button
         type="button"
-        className="photo-upload-avatar"
-        title="Manage profile photo"
-        aria-label="Manage profile photo"
+        className={`photo-upload-avatar ${previewOnClick && image ? "photo-preview-trigger" : ""}`}
+        title={previewOnClick && image ? "View profile photo" : "Manage profile photo"}
+        aria-label={previewOnClick && image ? "View profile photo" : "Manage profile photo"}
         aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((open) => !open)}
+        onClick={() => {
+          if (previewOnClick && image) {
+            setPreviewOpen(true);
+            return;
+          }
+          setMenuOpen((open) => !open);
+        }}
       >
         <span
           className={large ? "employee-big-avatar" : "avatar-chip"}
@@ -378,6 +396,29 @@ function ProfilePhotoControl({
         tabIndex={-1}
         aria-hidden="true"
       />
+      {previewOpen && image && (
+        <div
+          className="profile-photo-preview-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Profile photo preview"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPreviewOpen(false);
+          }}
+        >
+          <div className={`profile-photo-preview-card ${previewVariant ? `profile-photo-preview-${previewVariant}` : ""}`}>
+            <button
+              type="button"
+              className="profile-photo-preview-close"
+              onClick={() => setPreviewOpen(false)}
+              aria-label="Close profile photo preview"
+            >
+              <XIcon size={20} />
+            </button>
+            <img src={image} alt="Profile" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -391,7 +432,7 @@ function ToastNotification({ toast, onClose }) {
     if (!toast) return;
     const timer = setTimeout(() => {
       onClose();
-    }, 4500);
+    }, toast.durationMs ?? 4500);
     return () => clearTimeout(timer);
   }, [toast, onClose]);
 
@@ -437,8 +478,8 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [pathname, setPathname] = useState(() => window.location.pathname);
 
-  const showToast = (message, type = "info") => {
-    setToast({ message, type });
+  const showToast = (message, type = "info", durationMs = 4500) => {
+    setToast({ message, type, durationMs });
   };
 
   useEffect(() => {
@@ -571,7 +612,7 @@ export default function App() {
 
     const isAdminEmployeeDetailPath = /^\/admin\/employees\/[^/]+$/.test(pathname);
     const allowedPaths = user.role === "admin"
-      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests", "/admin/tickets"]
+      ? ["/admin", "/admin/dashboard", "/admin/employees", "/admin/requests", "/admin/tickets", "/admin/settings"]
       : ["/employee", "/employee/dashboard"];
 
     if (!allowedPaths.includes(pathname) && !(user.role === "admin" && isAdminEmployeeDetailPath)) {
@@ -585,14 +626,14 @@ export default function App() {
     setAuthCheckError("");
     setUser(account);
     navigate(account.role === "admin" ? "/admin/dashboard" : "/employee/dashboard", true);
-    showToast(`Welcome back, ${account.name || account.email}!`, "success");
+    showToast(`Welcome back, ${account.name || account.email}!`, "success", 1000);
   }
 
   function handleLogout() {
     clearToken();
     setUser(null);
     navigate("/login", true);
-    showToast("You have been signed out safely.", "info");
+    showToast("You have been signed out safely.", "info", 1000);
   }
 
   if (checkingAuth) {
@@ -1237,6 +1278,18 @@ function AcceptEmployeeInvite({ token, onLogin }) {
 function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
   const [employees, setEmployees] = useState([]);
   const [pendingRequests, setPendingRequests] = useState([]);
+  const [unseenTicketCount, setUnseenTicketCount] = useState(0);
+  const [settingsSection, setSettingsSection] = useState("personal");
+  const [adminProfile, setAdminProfile] = useState({
+    name: user.name || "",
+    email: user.email || "",
+    department: user.department || "",
+    contact_number: user.contact_number || "",
+    address: user.address || "",
+  });
+  const [adminPassword, setAdminPassword] = useState({ current_password: "", new_password: "", confirm_password: "" });
+  const [savingAdminProfile, setSavingAdminProfile] = useState(false);
+  const [savingAdminPassword, setSavingAdminPassword] = useState(false);
   const [requestLoadStatus, setRequestLoadStatus] = useState("loading");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1251,6 +1304,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
         ? "requests"
         : window.location.pathname === "/admin/tickets"
           ? "tickets"
+          : window.location.pathname === "/admin/settings"
+            ? "settings"
         : "dashboard",
   );
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
@@ -1262,6 +1317,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
   const [deleteModal, setDeleteModal] = useState(null); // employee object
   const [accessModal, setAccessModal] = useState(null);
   const [reviewRequest, setReviewRequest] = useState(null);
+  const [employeeOcrModal, setEmployeeOcrModal] = useState(null);
 
   async function loadEmployees() {
     setLoading(true);
@@ -1375,6 +1431,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
             ? "requests"
             : window.location.pathname === "/admin/tickets"
               ? "tickets"
+              : window.location.pathname === "/admin/settings"
+                ? "settings"
             : "dashboard",
       );
     }
@@ -1426,9 +1484,63 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
       employees: "/admin/employees",
       requests: "/admin/requests",
       tickets: "/admin/tickets",
+      settings: "/admin/settings",
       dashboard: "/admin/dashboard",
     }[tab];
     navigate(targetPath);
+  }
+
+  async function saveAdminProfile(event) {
+    event.preventDefault();
+    setSavingAdminProfile(true);
+    try {
+      const updated = await api("/auth/me", {
+        method: "PUT",
+        body: JSON.stringify({
+          name: adminProfile.name.trim(),
+          email: adminProfile.email.trim().toLowerCase(),
+          department: adminProfile.department.trim(),
+          contact_number: adminProfile.contact_number.trim(),
+          address: adminProfile.address.trim(),
+        }),
+      });
+      setAdminProfile(updated);
+      onUserUpdate((current) => ({ ...current, ...updated }));
+      showToast("Admin profile updated successfully.", "success");
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    } finally {
+      setSavingAdminProfile(false);
+    }
+  }
+
+  async function changeAdminPassword(event) {
+    event.preventDefault();
+    if (adminPassword.new_password.length < 8) {
+      showToast("New password must be at least 8 characters.", "error");
+      return;
+    }
+    if (adminPassword.new_password !== adminPassword.confirm_password) {
+      showToast("New password and confirmation do not match.", "error");
+      return;
+    }
+
+    setSavingAdminPassword(true);
+    try {
+      await api("/auth/me/password", {
+        method: "PUT",
+        body: JSON.stringify({
+          current_password: adminPassword.current_password,
+          new_password: adminPassword.new_password,
+        }),
+      });
+      setAdminPassword({ current_password: "", new_password: "", confirm_password: "" });
+      showToast("Password updated successfully.", "success");
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    } finally {
+      setSavingAdminPassword(false);
+    }
   }
 
   function openRequestReview(request) {
@@ -1441,6 +1553,25 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
     loadAccountRequests();
     const refreshTimer = window.setInterval(loadAccountRequests, 10000);
     return () => window.clearInterval(refreshTimer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api("/auth/me")
+      .then((account) => {
+        if (!active) return;
+        setAdminProfile({
+          name: account.name || "",
+          email: account.email || "",
+          department: account.department || "",
+          contact_number: account.contact_number || "",
+          address: account.address || "",
+        });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   const departments = useMemo(() => {
@@ -1498,6 +1629,17 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
     try {
       await downloadFile(`/employees/${employeeId}/resume`);
     } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  }
+
+  async function handleViewEmployeeOcr(employee) {
+    setEmployeeOcrModal({ employee, loading: true, documents: [] });
+    try {
+      const documents = await api(`/employees/${getEmployeeId(employee)}/documents`);
+      setEmployeeOcrModal({ employee, loading: false, documents });
+    } catch (err) {
+      setEmployeeOcrModal(null);
       showToast(getErrorMessage(err), "error");
     }
   }
@@ -1590,6 +1732,24 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                 <MailIcon size={18} />
                 <span>Ticket Management</span>
               </div>
+              {unseenTicketCount > 0 && (
+                <span className="sidebar-pill" aria-label={`${unseenTicketCount} new tickets not yet viewed`}>
+                  {unseenTicketCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              className={`sidebar-nav-link ${activeTab === "settings" ? "active" : ""}`}
+              onClick={() => {
+                navigateToTab("settings");
+                setSidebarOpen(false);
+              }}
+            >
+              <div className="sidebar-nav-item-left">
+                <ShieldIcon size={18} />
+                <span>Settings</span>
+              </div>
             </button>
           </div>
         </div>
@@ -1652,7 +1812,9 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                     ? "Account Requests"
                     : activeTab === "tickets"
                       ? "Ticket Management"
-                      : "Employee Records"}
+                      : activeTab === "settings"
+                        ? "Settings"
+                        : "Employee Records"}
               </span>
             </div>
           </div>
@@ -1753,6 +1915,8 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                 uploading={uploadingProfilePhoto}
                 onUpload={handleProfilePhotoUpload}
                 onRemove={handleRemoveProfilePhoto}
+                previewOnClick
+                previewVariant="admin"
               />
               <button
                 className="btn btn-secondary"
@@ -1770,7 +1934,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
         <main className="ems-content-area">
           <section className="page-intro">
             <div>
-              <p className="page-eyebrow">PEOPLE OPERATIONS</p>
+              {/* <p className="page-eyebrow">PEOPLE OPERATIONS</p> */}
               <h1>
                 {activeTab === "dashboard"
                   ? `Welcome back, ${(user.name || "there").split(" ")[0]}.`
@@ -1778,16 +1942,20 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                     ? "Account requests"
                     : activeTab === "tickets"
                       ? "Ticket Management"
-                    : "Employee directory"}
+                      : activeTab === "settings"
+                        ? "Admin settings"
+                        : "Employee directory"}
               </h1>
               <p className="page-description">
                 {activeTab === "dashboard"
-                  ? "A clear overview of your people, departments, and workspace."
+                  ? "A clear overview of your employees, departments, and workspace."
                   : activeTab === "requests"
                     ? "Review employee account requests and choose whether to approve them."
                     : activeTab === "tickets"
                       ? "Review employee tickets, track status, and respond to support conversations."
-                    : "Search, review, and manage your employee records in one place."}
+                      : activeTab === "settings"
+                        ? "Manage your personal information and account security."
+                        : "Search, review, and manage your employee records in one place."}
               </p>
             </div>
           </section>
@@ -1857,7 +2025,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
               ================================================================ */}
           {activeTab === "dashboard" && (
             <>
-              {/* 2-Column Overview Grid: Department Distribution & Quick Actions */}
+              {/* Department Distribution Overview */}
               <div
                 style={{
                   display: "grid",
@@ -1934,243 +2102,203 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                     )}
                   </div>
                 </section>
+              </div>
+            </>
+          )}
 
-                {/* Quick Actions & System Health Card */}
-                <section className="panel-card">
-                  <div className="panel-card-header">
-                    <div className="panel-title-group">
-                      <h2>Quick Actions & Health</h2>
-                      <p>Operational shortcuts and environment status</p>
-                    </div>
-                    <span
-                      className={`badge ${
-                        connectionStatus === "connected"
-                          ? "badge-emerald"
-                          : connectionStatus === "unavailable"
-                            ? "badge-amber"
-                            : "badge-gray"
-                      }`}
-                    >
-                      {connectionStatus === "connected"
-                        ? "API connected"
-                        : connectionStatus === "unavailable"
-                          ? "API unavailable"
-                          : "Checking API"}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      padding: "1.5rem",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "0.85rem",
-                    }}
-                  >
-                    <button
-                      className="btn btn-secondary"
-                      style={{
-                        width: "100%",
-                        padding: "0.75rem",
-                        justifyContent: "flex-start",
-                        gap: "0.75rem",
-                      }}
-                      onClick={() => navigateToTab("employees")}
-                    >
-                      <UsersIcon size={18} />
-                      <span>Open Full Employee Records ({employees.length})</span>
-                    </button>
-
-                    <button
-                      className="btn btn-secondary"
-                      style={{
-                        width: "100%",
-                        padding: "0.75rem",
-                        justifyContent: "flex-start",
-                        gap: "0.75rem",
-                      }}
-                      onClick={loadEmployees}
-                    >
-                      <RefreshCwIcon size={18} className={loading ? "animate-spin" : ""} />
-                      <span>Refresh All Records</span>
-                    </button>
-
-                    <div className="auth-hint-box" style={{ marginTop: "0.5rem" }}>
-                      <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
-                      <span>
-                        <strong>System status:</strong>{" "}
-                        {connectionStatus === "connected"
-                          ? "The employee service responded successfully."
-                          : connectionStatus === "unavailable"
-                            ? "The employee service did not respond. Check the backend and try refreshing."
-                            : "Checking employee service availability."}
-                      </span>
-                    </div>
-                  </div>
-                </section>
+          {activeTab === "settings" && (
+            <>
+              <div className="employee-settings-options admin-settings-options" role="group" aria-label="Admin settings sections">
+                <button
+                  type="button"
+                  className={`btn ${settingsSection === "personal" ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setSettingsSection("personal")}
+                >
+                  Personal Information
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${settingsSection === "security" ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setSettingsSection("security")}
+                >
+                  Account Security
+                </button>
               </div>
 
-              {/* Recent Employees Overview Snapshot */}
-              <section className="panel-card">
-                <div className="panel-card-header">
-                  <div className="panel-title-group">
-                    <h2>Recent Employee Records</h2>
-                    <p>Latest personnel registered in the database</p>
+              {settingsSection === "personal" ? (
+                <section className="panel-card admin-settings-card">
+                  <div className="panel-card-header">
+                    <div className="panel-title-group">
+                      <h2>Personal Information</h2>
+                      {/* <p>View and update your registered contact details.</p> */}
+                    </div>
                   </div>
-                  <button className="btn btn-secondary" onClick={() => navigateToTab("employees")}>
-                    <span>Manage All Records &rarr;</span>
-                  </button>
-                </div>
-
-                {employees.length === 0 ? (
-                  <div className="table-empty-state">
-                    <p className="subtext">No employee records in the system yet.</p>
+                  <form className="admin-settings-form" onSubmit={saveAdminProfile}>
+                    <div className="admin-profile-photo-settings">
+                      <ProfilePhotoControl
+                        image={user.profile_image}
+                        initials={getInitials(user.name || user.email)}
+                        uploading={uploadingProfilePhoto}
+                        onUpload={handleProfilePhotoUpload}
+                        onRemove={handleRemoveProfilePhoto}
+                        previewOnClick
+                        previewVariant="admin"
+                        large
+                      />
+                      <div className="admin-profile-photo-actions">
+                        <strong>Profile Picture</strong>
+                        <div className="admin-profile-photo-buttons">
+                          <label className="btn btn-secondary" style={{ cursor: uploadingProfilePhoto ? "wait" : "pointer" }}>
+                            <UploadCloudIcon size={16} />
+                            <span>{uploadingProfilePhoto ? "Uploading…" : "Upload Profile Picture"}</span>
+                            <input
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              style={{ display: "none" }}
+                              onChange={handleProfilePhotoUpload}
+                              disabled={uploadingProfilePhoto}
+                            />
+                          </label>
+                          {user.profile_image && (
+                            <button
+                              type="button"
+                              className="btn btn-danger"
+                              onClick={handleRemoveProfilePhoto}
+                              disabled={uploadingProfilePhoto}
+                            >
+                              <TrashIcon size={16} />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
+                        <p className="subtext">PNG, JPEG,  etc. Maximum 2MB.</p>
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-settings-name">Name / Username</label>
+                      <input
+                        id="admin-settings-name"
+                        className="input-field no-icon"
+                        value={adminProfile.name}
+                        onChange={(event) => setAdminProfile((current) => ({ ...current, name: event.target.value }))}
+                        maxLength={100}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-settings-email">Email Address</label>
+                      <input
+                        id="admin-settings-email"
+                        type="email"
+                        className="input-field no-icon"
+                        value={adminProfile.email}
+                        onChange={(event) => setAdminProfile((current) => ({ ...current, email: event.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-settings-contact">Contact Number</label>
+                      <input
+                        id="admin-settings-contact"
+                        name="contact_number"
+                        className="input-field no-icon"
+                        value={adminProfile.contact_number}
+                        onChange={(event) => setAdminProfile((current) => ({ ...current, contact_number: event.target.value }))}
+                        maxLength={50}
+                        placeholder="Add phone number"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-settings-address">Location</label>
+                      <textarea
+                        id="admin-settings-address"
+                        name="address"
+                        rows={2}
+                        className="input-field no-icon"
+                        value={adminProfile.address}
+                        onChange={(event) => setAdminProfile((current) => ({ ...current, address: event.target.value }))}
+                        maxLength={500}
+                        placeholder="Add address"
+                      />
+                    </div>
+                    <div className="admin-settings-form-actions">
+                      <button type="submit" className="btn btn-primary" disabled={savingAdminProfile}>
+                        {savingAdminProfile ? "Saving…" : "Save Profile"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              ) : (
+                <section className="panel-card admin-settings-card">
+                  <div className="panel-card-header">
+                    <div className="panel-title-group">
+                      <h2>Account Security</h2>
+                      {/* <p>Update your portal access password.</p> */}
+                    </div>
                   </div>
-                ) : (
-                  <div className="table-responsive-wrapper">
-                    <table className="ems-table">
-                      <thead>
-                        <tr>
-                          <th>Employee ID</th>
-                          <th>Employee</th>
-                          <th>Department</th>
-                          <th>Contact</th>
-                          <th>Address</th>
-                          <th>Resume</th>
-                          <th>Account</th>
-                          <th style={{ textAlign: "right" }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {employees
-                          .slice()
-                          .sort(compareEmployeeIds)
-                          .slice(-5)
-                          .map((emp) => {
-                            const id = getEmployeeId(emp);
-                            const color = getAvatarColor(emp.name || emp.email);
-
-                            return (
-                              <tr key={id}>
-                                <td>
-                                  <span className="badge badge-gray">{emp.employee_id || "—"}</span>
-                                </td>
-
-                                <td>
-                                  <div className="table-employee-cell">
-                                    <div
-                                      className="avatar-chip"
-                                      style={{ backgroundColor: color.bg, color: color.text }}
-                                    >
-                                      {emp.profile_image ? (
-                                        <img
-                                          src={emp.profile_image}
-                                          alt=""
-                                          style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }}
-                                        />
-                                      ) : (
-                                        getInitials(emp.name)
-                                      )}
-                                    </div>
-                                    <div>
-                                      <div className="employee-cell-name">{emp.name}</div>
-                                      <div className="employee-cell-email">{emp.email}</div>
-                                    </div>
-                                  </div>
-                                </td>
-
-                                <td>
-                                  <span className="badge badge-indigo">
-                                    {emp.department || "General"}
-                                  </span>
-                                </td>
-
-                                <td>{emp.contact_number || <span style={{ color: "#94a3b8" }}>—</span>}</td>
-
-                                <td
-                                  style={{
-                                    maxWidth: 220,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {emp.address || <span style={{ color: "#94a3b8" }}>—</span>}
-                                </td>
-
-                                <td>
-                                  {emp.resume_original_name ? (
-                                    <button
-                                      type="button"
-                                      className="action-btn"
-                                      style={{
-                                        color: "#4338ca",
-                                        borderColor: "#c7d2fe",
-                                        background: "#eef2ff",
-                                        fontWeight: 600,
-                                      }}
-                                      onClick={() => handleViewEmployeeResume(id)}
-                                      title={`View/Download ${emp.resume_original_name}`}
-                                    >
-                                      <FileTextIcon size={14} />
-                                      <span>PDF</span>
-                                    </button>
-                                  ) : (
-                                    <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>—</span>
-                                  )}
-                                </td>
-
-                                <td>
-                                  <span className={`badge ${emp.account_status === "pending" ? "badge-amber" : emp.account_status === "approved" ? "badge-emerald" : "badge-gray"}`}>
-                                    {emp.account_status === "pending"
-                                      ? "Pending approval"
-                                      : emp.account_status === "approved"
-                                        ? "Approved"
-                                        : "No account"}
-                                  </span>
-                                </td>
-
-                                <td>
-                                  <div
-                                    className="table-actions-cell"
-                                    style={{ justifyContent: "flex-end" }}
-                                  >
-                                    {emp.account_status === "pending" && (
-                                      <button
-                                        className="action-btn edit"
-                                        onClick={() => approveAccount(emp)}
-                                        title="Approve this account request"
-                                      >
-                                        <CheckCircleIcon size={14} />
-                                        <span>Approve</span>
-                                      </button>
-                                    )}
-                                    <button
-                                      className="action-btn edit"
-                                      onClick={() => handleOpenEdit(emp)}
-                                      title="Edit employee details"
-                                    >
-                                      <EditIcon size={14} />
-                                      <span>Edit</span>
-                                    </button>
-
-                                    <button
-                                      className="action-btn key"
-                                      onClick={() => setResetPasswordModal(emp)}
-                                      title="Set or reset login password"
-                                    >
-                                      <KeyIcon size={14} />
-                                      <span>Set Login</span>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
+                  <form className="admin-settings-form" onSubmit={changeAdminPassword}>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-current-password">Current Password</label>
+                      <div className="input-container">
+                        <KeyIcon size={18} className="input-icon-left" />
+                        <input
+                          id="admin-current-password"
+                          type="password"
+                          className="input-field"
+                          placeholder="Enter current password"
+                          value={adminPassword.current_password}
+                          onChange={(event) => setAdminPassword((current) => ({ ...current, current_password: event.target.value }))}
+                          autoComplete="current-password"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-new-password">New Password (min 8 chars)</label>
+                      <div className="input-container">
+                        <KeyIcon size={18} className="input-icon-left" />
+                        <input
+                          id="admin-new-password"
+                          type="password"
+                          className="input-field"
+                          placeholder="Enter new password"
+                          value={adminPassword.new_password}
+                          onChange={(event) => setAdminPassword((current) => ({ ...current, new_password: event.target.value }))}
+                          autoComplete="new-password"
+                          minLength={8}
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="admin-confirm-password">Confirm New Password</label>
+                      <div className="input-container">
+                        <KeyIcon size={18} className="input-icon-left" />
+                        <input
+                          id="admin-confirm-password"
+                          type="password"
+                          className="input-field"
+                          placeholder="Re-enter new password"
+                          value={adminPassword.confirm_password}
+                          onChange={(event) => setAdminPassword((current) => ({ ...current, confirm_password: event.target.value }))}
+                          autoComplete="new-password"
+                          minLength={8}
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="auth-hint-box" style={{ marginTop: "1.5rem" }}>
+                      <ShieldIcon size={18} style={{ color: "#4f46e5", flexShrink: 0 }} />
+                      <span>Your password should be at least 8 characters long and kept confidential.</span>
+                    </div>
+                    <div className="admin-settings-form-actions">
+                      <button type="submit" className="btn btn-primary" disabled={savingAdminPassword}>
+                        {savingAdminPassword ? "Updating…" : "Change Password"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              )}
             </>
           )}
 
@@ -2179,7 +2307,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
               <div className="panel-card-header">
                 <div className="panel-title-group">
                   <h2>Pending account requests</h2>
-                  <p>Review submitted details before approving or declining access.</p>
+                  {/* <p>Review submitted details before approving or declining access.</p> */}
                 </div>
                 <button
                   type="button"
@@ -2264,7 +2392,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
               <div className="panel-card-header">
                 <div className="panel-title-group">
                   <h2>Employee Records Directory</h2>
-                  <p>Search, filter, edit, and manage all employee records and credentials.</p>
+                  {/* <p>Search, filter, edit, and manage all employee records and credentials.</p> */}
                 </div>
 
                 <div style={{ display: "flex", gap: "0.65rem" }}>
@@ -2360,7 +2488,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                 </div>
               ) : (
                 <div className="table-responsive-wrapper">
-                  <table className="ems-table">
+                  <table className="ems-table employee-records-table">
                     <thead>
                       <tr>
                         <th>Employee ID</th>
@@ -2368,6 +2496,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                         <th>Department</th>
                         <th>Contact Number</th>
                         <th>Address</th>
+                        <th>Documents</th>
                         <th>Resume</th>
                         <th>Account</th>
                         <th style={{ textAlign: "right" }}>Actions</th>
@@ -2431,6 +2560,23 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                             </td>
 
                             <td>
+                              {emp.document_count ? (
+                                <button
+                                  type="button"
+                                  className="action-btn"
+                                  style={{ color: "#4338ca", borderColor: "#c7d2fe", background: "#eef2ff", fontWeight: 600 }}
+                                  onClick={() => handleViewEmployeeOcr(emp)}
+                                  title={`View documents for ${emp.name || emp.email}`}
+                                >
+                                  <FileTextIcon size={14} />
+                                  <span>View Documents</span>
+                                </button>
+                              ) : (
+                                <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>No document</span>
+                              )}
+                            </td>
+
+                            <td>
                               {emp.resume_original_name ? (
                                 <button
                                   type="button"
@@ -2472,7 +2618,6 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
                             <td>
                               <div
                                 className="table-actions-cell"
-                                style={{ justifyContent: "flex-end" }}
                               >
                                 {emp.account_status === "pending" && (
                                   <button
@@ -2495,7 +2640,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
 
                                 {["approved", "deactivated"].includes(emp.account_status) && (
                                   <button
-                                    className={emp.account_status === "deactivated" ? "action-btn edit" : "action-btn"}
+                                    className={`action-btn action-btn-access${emp.account_status === "deactivated" ? " edit" : ""}`}
                                     onClick={() => setAccessModal(emp)}
                                     title={emp.account_status === "deactivated" ? "Reactivate employee access" : "Temporarily deactivate employee access"}
                                   >
@@ -2535,6 +2680,7 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
           <AdminTicketManagement
             active={activeTab === "tickets"}
             showToast={showToast}
+            onUnseenCountChange={setUnseenTicketCount}
           />
         </main>
       </div>
@@ -2572,6 +2718,16 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
             }
           }}
           showToast={showToast}
+        />
+      )}
+
+      {employeeOcrModal && (
+        <AdminEmployeeDocumentsModal
+          employee={employeeOcrModal.employee}
+          loading={employeeOcrModal.loading}
+          documents={employeeOcrModal.documents}
+          showToast={showToast}
+          onClose={() => setEmployeeOcrModal(null)}
         />
       )}
 
@@ -2686,6 +2842,103 @@ function AdminDashboard({ user, pathname, onUserUpdate, onLogout, showToast }) {
 // 7. ADD / EDIT EMPLOYEE MODAL
 // ==========================================================================
 
+function AdminEmployeeDocumentsModal({ employee, loading, documents, onClose, showToast }) {
+  const employeeId = getEmployeeId(employee);
+  const [items, setItems] = useState(documents || []);
+  const [processingId, setProcessingId] = useState(null);
+  const [downloadMenuId, setDownloadMenuId] = useState(null);
+  useEffect(() => setItems(documents || []), [documents]);
+
+  async function runOcr(documentItem) {
+    setProcessingId(documentItem.id);
+    try {
+      const result = await api(`/employees/${employeeId}/documents/${documentItem.id}/ocr`, { method: "POST" });
+      setItems((current) => current.map((item) => item.id === documentItem.id ? { ...item, ocr_result: result } : item));
+      showToast("OCR completed for this document.", "success");
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    } finally {
+      setProcessingId(null);
+    }
+  }
+
+  async function openDocument(documentItem, shouldDownload = false) {
+    const path = `/employees/${employeeId}/documents/${documentItem.id}/${shouldDownload ? "download" : "file"}`;
+    try {
+      if (shouldDownload) await saveFileAs(path, documentItem.filename);
+      else await downloadFile(path);
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    }
+  }
+
+  async function openOcrText(documentItem) {
+    try {
+      await downloadFile(`/employees/${employeeId}/documents/${documentItem.id}/ocr/text`);
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    }
+  }
+
+  async function downloadOcrText(documentItem) {
+    try {
+      const safeLabel = (documentItem.document_label || "document").replace(/[^a-z0-9_-]+/gi, "-");
+      await saveFileAs(`/employees/${employeeId}/documents/${documentItem.id}/ocr/text`, `${safeLabel}-ocr.txt`);
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    }
+  }
+
+  return (
+    <div className="modal-backdrop employee-form-backdrop">
+      <section className="modal-card employee-form-modal" role="dialog" aria-modal="true" aria-labelledby="employee-documents-title">
+        <div className="modal-header">
+          <div>
+            <h3 id="employee-documents-title">Employee documents</h3>
+            <p className="subtext">{employee.name || employee.email} · Employee ID {employee.employee_id || getEmployeeId(employee)}</p>
+          </div>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close employee documents">×</button>
+        </div>
+        <div className="modal-body employee-form-scroll" style={{ padding: "1.25rem" }}>
+          {loading ? (
+            <p className="subtext">Loading documents…</p>
+          ) : items.length ? (
+            <div style={{ display: "grid", gap: "1rem" }}>
+              {items.map((documentItem) => {
+                const result = documentItem.ocr_result;
+                return (
+                  <article key={documentItem.id} style={{ padding: "1rem", border: "1px solid #e2e8f0", borderRadius: "10px", background: "#fff" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+                      <div><strong>{documentItem.filename}</strong><div className="subtext">Document: {documentItem.document_label || "Not described"} · {Math.max(1, Math.round((documentItem.file_size || 0) / 1024))} KB · {documentItem.uploaded_at ? new Date(documentItem.uploaded_at).toLocaleString() : ""}</div></div>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" className="btn btn-secondary" onClick={() => openDocument(documentItem)}>Open</button>
+                        <div style={{ position: "relative" }}>
+                          <button type="button" className="btn btn-secondary" aria-expanded={downloadMenuId === documentItem.id} onClick={() => setDownloadMenuId((current) => current === documentItem.id ? null : documentItem.id)}>Download ▾</button>
+                          {downloadMenuId === documentItem.id && (
+                            <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 5, minWidth: "190px", padding: "0.35rem", display: "grid", gap: "0.25rem", background: "white", border: "1px solid #e2e8f0", borderRadius: "8px", boxShadow: "0 8px 24px rgba(15, 23, 42, 0.14)" }}>
+                              <button type="button" className="btn btn-secondary" style={{ justifyContent: "flex-start" }} onClick={() => { setDownloadMenuId(null); openDocument(documentItem, true); }}>Download original file</button>
+                              <button type="button" className="btn btn-secondary" style={{ justifyContent: "flex-start" }} disabled={!result} onClick={() => { setDownloadMenuId(null); if (result) downloadOcrText(documentItem); }}>{result ? "Download OCR text" : "Run OCR to get text"}</button>
+                            </div>
+                          )}
+                        </div>
+                        <button type="button" className="btn btn-primary" disabled={processingId === documentItem.id} onClick={() => runOcr(documentItem)}>{processingId === documentItem.id ? "Reading…" : result ? "Re-run OCR" : "Run OCR"}</button>
+                        {result && <button type="button" className="btn btn-secondary" onClick={() => openOcrText(documentItem)}>View OCR</button>}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : <p className="subtext">No documents uploaded yet.</p>}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSuccess, showToast }) {
   const isEdit = Boolean(employee);
   const [form, setForm] = useState({
@@ -2697,7 +2950,6 @@ function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSucc
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-
   function handleChange(e) {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -2939,6 +3191,7 @@ function EmployeeFormModal({ employee, onClose, onDelete, onManageAccess, onSucc
                 )}
               </div>
             )}
+
           </div>
 
           <div className="modal-footer">
@@ -3270,6 +3523,8 @@ function DeleteConfirmModal({ employee, onClose, onSuccess, showToast }) {
 // ==========================================================================
 
 function EmployeeDashboard({ user, onLogout, showToast }) {
+  const [employeeView, setEmployeeView] = useState("welcome");
+  const [settingsSection, setSettingsSection] = useState("personal");
   const [profile, setProfile] = useState({
     name: user.name || "",
     email: user.email || "",
@@ -3289,11 +3544,18 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingResume, setUploadingResume] = useState(false);
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
+  const [employeeDocuments, setEmployeeDocuments] = useState([]);
+  const [selectedDocuments, setSelectedDocuments] = useState([]);
+  const [documentsBusy, setDocumentsBusy] = useState(false);
+  const [editingDocumentId, setEditingDocumentId] = useState(null);
+  const [documentLabelDraft, setDocumentLabelDraft] = useState("");
 
   async function loadProfile() {
     setLoading(true);
     try {
       const data = await api("/employees/me");
+      const savedDocuments = await api("/employees/me/documents").catch(() => []);
+      setEmployeeDocuments(savedDocuments);
       setProfile({
         name: data.name || "",
         email: data.email || "",
@@ -3310,6 +3572,110 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
       showToast(getErrorMessage(err), "error");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function handleDocumentSelection(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
+    const allowed = ["image/png", "image/jpeg", "image/webp", "image/tiff", "application/pdf"];
+    const validFiles = files.filter((file) => {
+      const extensionAllowed = /\.(png|jpe?g|webp|tiff?|pdf)$/i.test(file.name);
+      if (!allowed.includes(file.type) && !extensionAllowed) {
+        showToast(`${file.name}: unsupported file type.`, "error");
+        return false;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        showToast(`${file.name}: files must be 10MB or smaller.`, "error");
+        return false;
+      }
+      return true;
+    });
+    if (!validFiles.length) return;
+    setSelectedDocuments((current) => [
+      ...current,
+      ...validFiles.map((file) => ({ id: `${Date.now()}-${Math.random()}`, file, document_label: "" })),
+    ]);
+  }
+
+  async function handleDocumentsUpload(selectedDocumentId = null) {
+    const documentsToUpload = selectedDocumentId
+      ? selectedDocuments.filter((item) => item.id === selectedDocumentId)
+      : selectedDocuments;
+    if (!documentsToUpload.length) return;
+    if (documentsToUpload.some((item) => !item.document_label.trim())) {
+      showToast("Enter a document description for each selected file.", "error");
+      return;
+    }
+    setDocumentsBusy(true);
+    const uploaded = [];
+    const failed = [];
+    const uploadedIds = new Set();
+    for (const item of documentsToUpload) {
+      const { file } = item;
+      try {
+        const fileData = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+          reader.readAsDataURL(file);
+        });
+        const result = await api("/employees/me/documents", {
+          method: "POST",
+          body: JSON.stringify({ filename: file.name, file_data: fileData, document_label: item.document_label.trim() }),
+        });
+        uploaded.push(result);
+        uploadedIds.add(item.id);
+      } catch (error) {
+        showToast(getErrorMessage(error), "error");
+        failed.push(item);
+      }
+    }
+    if (uploaded.length) {
+      setEmployeeDocuments((current) => [...current, ...uploaded]);
+      showToast(`${uploaded.length} document${uploaded.length === 1 ? "" : "s"} uploaded.`, "success");
+    }
+    setSelectedDocuments((current) => [
+      ...current.filter((item) => !uploadedIds.has(item.id) && !failed.some((failedItem) => failedItem.id === item.id)),
+      ...failed,
+    ]);
+    setDocumentsBusy(false);
+  }
+
+  async function handleOpenEmployeeDocument(documentItem, download = false) {
+    try {
+      const path = `/employees/me/documents/${documentItem.id}/${download ? "download" : "file"}`;
+      if (download) await saveFileAs(path, documentItem.filename);
+      else await downloadFile(path);
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    }
+  }
+
+  async function handleSaveDocumentLabel(documentItem) {
+    try {
+      const updated = await api(`/employees/me/documents/${documentItem.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ document_label: documentLabelDraft }),
+      });
+      setEmployeeDocuments((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setEditingDocumentId(null);
+      showToast("Document description updated.", "success");
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
+    }
+  }
+
+  async function handleDeleteEmployeeDocument(documentItem) {
+    if (!window.confirm(`Delete ${documentItem.filename}? This cannot be undone.`)) return;
+    try {
+      await api(`/employees/me/documents/${documentItem.id}`, { method: "DELETE" });
+      setEmployeeDocuments((current) => current.filter((item) => item.id !== documentItem.id));
+      if (editingDocumentId === documentItem.id) setEditingDocumentId(null);
+      showToast("Document deleted.", "success");
+    } catch (error) {
+      showToast(getErrorMessage(error), "error");
     }
   }
 
@@ -3551,10 +3917,20 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
               uploading={uploadingProfilePhoto}
               onUpload={handleProfilePhotoUpload}
               onRemove={handleRemoveProfilePhoto}
+              previewOnClick
             />
             <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#334155" }}>
               {profile.name || user.email}
             </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: "0.4rem 0.75rem", fontSize: "0.8rem" }}
+              aria-pressed={employeeView === "settings"}
+              onClick={() => setEmployeeView((current) => current === "settings" ? "welcome" : "settings")}
+            >
+              {employeeView === "settings" ? "Back" : "Settings"}
+            </button>
             <button
               className="btn btn-secondary"
               style={{ padding: "0.4rem 0.75rem", fontSize: "0.8rem", marginLeft: "0.5rem" }}
@@ -3568,7 +3944,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
       </header>
 
       {/* Main Content Canvas */}
-      <main className="ems-content-area">
+      <main className="ems-content-area employee-content-area">
         {/* Welcome Hero Banner */}
         <section className="employee-hero-card">
           <div className="employee-hero-left">
@@ -3578,6 +3954,7 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
               uploading={uploadingProfilePhoto}
               onUpload={handleProfilePhotoUpload}
               onRemove={handleRemoveProfilePhoto}
+              previewOnClick
               large
             />
             <div>
@@ -3603,6 +3980,15 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
           </div>
         </section>
 
+        {employeeView === "settings" && (
+          <nav className="employee-portal-nav" aria-label="Settings sections">
+            <div className="employee-settings-options" role="group" aria-label="Settings sections">
+              <button type="button" className={`btn ${settingsSection === "personal" ? "btn-primary" : "btn-secondary"}`} onClick={() => setSettingsSection("personal")}>Personal Information</button>
+              <button type="button" className={`btn ${settingsSection === "security" ? "btn-primary" : "btn-secondary"}`} onClick={() => setSettingsSection("security")}>Account Security</button>
+            </div>
+          </nav>
+        )}
+
         {loading ? (
           <div style={{ padding: "4rem", textAlign: "center", color: "#64748b" }}>
             <RefreshCwIcon size={24} className="animate-spin" style={{ margin: "0 auto 0.75rem" }} />
@@ -3610,9 +3996,9 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
           </div>
         ) : (
           <>
-            <div className="employee-grid-layout">
+            <div className="employee-grid-layout" style={{ display: employeeView === "settings" ? "grid" : "none", gridTemplateColumns: "minmax(0, 1fr)" }}>
             {/* Left Card: Edit Profile */}
-            <div className="panel-card">
+            <div className="panel-card" style={{ display: settingsSection === "personal" ? "block" : "none" }}>
               <div className="panel-card-header">
                 <div className="panel-title-group">
                   <h2>Personal Information</h2>
@@ -3621,6 +4007,46 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
               </div>
 
               <form onSubmit={handleUpdateProfile} style={{ padding: "1.5rem" }}>
+                <div className="admin-profile-photo-settings">
+                  <ProfilePhotoControl
+                    image={profile.profile_image}
+                    initials={getInitials(profile.name || user.email)}
+                    uploading={uploadingProfilePhoto}
+                    onUpload={handleProfilePhotoUpload}
+                    onRemove={handleRemoveProfilePhoto}
+                    previewOnClick
+                    large
+                  />
+                  <div className="admin-profile-photo-actions">
+                    <strong>Profile Picture</strong>
+                    <div className="admin-profile-photo-buttons">
+                      <label className="btn btn-secondary" style={{ cursor: uploadingProfilePhoto ? "wait" : "pointer" }}>
+                        <UploadCloudIcon size={16} />
+                        <span>{uploadingProfilePhoto ? "Uploading…" : "Upload Profile Picture"}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          style={{ display: "none" }}
+                      
+                          onChange={handleProfilePhotoUpload}
+                          disabled={uploadingProfilePhoto}
+                        />
+                      </label>
+                      {profile.profile_image && (
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={handleRemoveProfilePhoto}
+                          disabled={uploadingProfilePhoto}
+                        >
+                          <TrashIcon size={16} />
+                          <span>Delete</span>
+                        </button>
+                      )}
+                    </div>
+                    <p className="subtext">PNG, JPEG, etc. Maximum 2MB.</p>
+                  </div>
+                </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="prof-name">Name / Username</label>
                   <input
@@ -3692,11 +4118,11 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
             </div>
 
             {/* Right Card: Change Password */}
-            <div className="panel-card">
+            <div className="panel-card" style={{ display: settingsSection === "security" ? "block" : "none" }}>
               <div className="panel-card-header">
                 <div className="panel-title-group">
                   <h2>Account Security</h2>
-                  <p>Update your portal access password.</p>
+                  {/* <p>Update your portal access password.</p> */}
                 </div>
               </div>
 
@@ -3774,15 +4200,15 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
           </div>
 
           {/* Full-Width Card: Resume PDF Upload & Storage */}
-          <div className="panel-card" style={{ marginTop: "1.75rem" }}>
+          <div className="panel-card" style={{ marginTop: "1.75rem", display: employeeView === "welcome" ? "block" : "none" }}>
             <div className="panel-card-header">
               <div className="panel-title-group">
-                <h2>Resume & Professional Documents</h2>
+                <h2>Resume</h2>
                 <p>Upload and store your CV or resume in PDF format (maximum 5MB).</p>
               </div>
-              {profile.resume_original_name && (
+              {/* {profile.resume_original_name && (
                 <span className="badge badge-emerald">Resume Active</span>
-              )}
+              )} */}
             </div>
 
             <div style={{ padding: "1.5rem" }}>
@@ -3885,10 +4311,70 @@ function EmployeeDashboard({ user, onLogout, showToast }) {
               )}
             </div>
           </div>
+
+          <div className="panel-card" style={{ marginTop: "1.75rem", display: employeeView === "welcome" ? "block" : "none" }}>
+            <div className="panel-card-header">
+              <div className="panel-title-group">
+                <h2>My documents</h2>
+                <p>Upload multiple images or PDFs. You can open or download your files here.</p>
+              </div>
+              <label className="btn btn-primary" style={{ cursor: documentsBusy ? "wait" : "pointer" }}>
+                <UploadCloudIcon size={16} />
+                <span>{documentsBusy ? "Uploading documents…" : "Choose documents"}</span>
+                <input type="file" multiple accept=".png,.jpg,.jpeg,.webp,.tif,.tiff,.pdf,image/png,image/jpeg,image/webp,image/tiff,application/pdf" style={{ display: "none" }} onChange={handleDocumentSelection} disabled={documentsBusy} />
+              </label>
+            </div>
+            <div style={{ padding: "1.5rem" }}>
+              {/* <p className="subtext" style={{ marginTop: "0.75rem" }}>Select multiple files, then enter a description for each. Supported: PNG, JPEG, WebP, TIFF, and PDF. Maximum 10MB per file.</p> */}
+              {selectedDocuments.length > 0 && (
+                <div style={{ display: "grid", gap: "0.75rem", marginTop: "1rem" }}>
+                  {selectedDocuments.map((item) => (
+                    <div key={item.id} className="employee-selected-document-row">
+                      <strong className="employee-selected-document-name">{item.file.name}</strong>
+                      <input className="input-field no-icon" maxLength={100} placeholder="What document is this? e.g. Resume" value={item.document_label} onChange={(event) => setSelectedDocuments((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, document_label: event.target.value } : candidate))} />
+                      <button type="button" className="btn btn-primary" disabled={documentsBusy} onClick={() => handleDocumentsUpload(item.id)}>{documentsBusy ? "Uploading…" : "Upload"}</button>
+                      <button type="button" className="btn btn-secondary" disabled={documentsBusy} onClick={() => setSelectedDocuments((current) => current.filter((candidate) => candidate.id !== item.id))}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {employeeDocuments.length ? (
+                <div style={{ display: "grid", gap: "0.75rem", marginTop: "1.25rem" }}>
+                  {employeeDocuments.map((documentItem) => (
+                    <div key={documentItem.id} className="resume-file-card" style={{ padding: "0.85rem 1rem" }}>
+                      <div className="resume-file-info">
+                        <div className="resume-pdf-badge" style={{ width: 36, height: 36 }}><FileTextIcon size={18} /></div>
+                        <div>
+                          <div style={{ fontWeight: 600, color: "#0f172a", overflowWrap: "anywhere" }}>{documentItem.filename}</div>
+                          {editingDocumentId === documentItem.id ? (
+                            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
+                              <input className="input-field no-icon" maxLength={100} value={documentLabelDraft} onChange={(event) => setDocumentLabelDraft(event.target.value)} aria-label="Document description" />
+                              <button type="button" className="btn btn-primary" onClick={() => handleSaveDocumentLabel(documentItem)}>Save</button>
+                              <button type="button" className="btn btn-secondary" onClick={() => setEditingDocumentId(null)}>Cancel</button>
+                            </div>
+                          ) : (
+                            <div className="subtext">{documentItem.document_label || "Document"} · {Math.max(1, Math.round((documentItem.file_size || 0) / 1024))} KB · {documentItem.uploaded_at ? new Date(documentItem.uploaded_at).toLocaleDateString() : ""}</div>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" className="btn btn-secondary" onClick={() => handleOpenEmployeeDocument(documentItem)}>Open</button>
+                        <button type="button" className="btn btn-secondary" onClick={() => handleOpenEmployeeDocument(documentItem, true)}>Download</button>
+                        {editingDocumentId !== documentItem.id && <button type="button" className="btn btn-secondary" onClick={() => { setEditingDocumentId(documentItem.id); setDocumentLabelDraft(documentItem.document_label || ""); }}>Edit description</button>}
+                        <button type="button" className="btn btn-danger" onClick={() => handleDeleteEmployeeDocument(documentItem)}>Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="subtext" style={{ marginTop: "1rem" }}>No documents uploaded yet.</p>}
+            </div>
+          </div>
           </>
         )}
       </main>
-      <EmployeeTicketSupport profile={profile} showToast={showToast} />
+      <div style={{ display: employeeView === "welcome" ? "block" : "none" }}>
+        <EmployeeTicketSupport profile={profile} showToast={showToast} onLogout={onLogout} />
+      </div>
     </div>
   );
 }

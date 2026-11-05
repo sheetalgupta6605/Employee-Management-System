@@ -738,6 +738,16 @@ def accept_ticket(
         },
     )
 
+    ticket_notifications_collection.update_many(
+        {
+            "ticket_id": ticket_id,
+            "recipient_role": "admin",
+            "title": "New employee ticket",
+            "is_read": False,
+        },
+        {"$set": {"is_read": True}},
+    )
+
     _notify_employee(
         ticket,
         employee_account,

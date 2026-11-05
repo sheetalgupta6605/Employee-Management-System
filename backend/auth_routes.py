@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, EmailStr, Field
 from pymongo.errors import DuplicateKeyError
 
 from auth import (
@@ -13,9 +14,17 @@ from auth import (
 )
 from database import account_requests_collection, users_collection
 from employee_services import normalize_email, validate_profile_image
-from models import ProfilePhotoUpload, UserLogin, UserSignup
+from models import ChangePassword, ProfilePhotoUpload, UserLogin, UserSignup
 
 router = APIRouter()
+
+
+class AdminProfileUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    department: str = Field(default="", max_length=100)
+    contact_number: str = Field(default="", max_length=50)
+    address: str = Field(default="", max_length=500)
 
 
 @router.post("/auth/signup", status_code=status.HTTP_201_CREATED)
@@ -108,7 +117,67 @@ def get_my_account(current_user: dict = Depends(get_current_user)):
         "role": current_user["role"],
         "profile_image": current_user.get("profile_image", ""),
         "must_change_password": bool(current_user.get("must_change_password")),
+        "department": current_user.get("department", ""),
+        "contact_number": current_user.get("contact_number", ""),
+        "address": current_user.get("address", ""),
     }
+
+
+@router.put("/auth/me")
+def update_admin_account(
+    payload: AdminProfileUpdate,
+    current_user: dict = Depends(require_admin),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+
+    email = normalize_email(str(payload.email))
+    if users_collection.find_one({"email": email, "_id": {"$ne": current_user["_id"]}}):
+        raise HTTPException(status_code=409, detail="This email is already in use")
+
+    try:
+        users_collection.update_one(
+            {"_id": current_user["_id"]},
+            {
+                "$set": {
+                    "name": name,
+                    "email": email,
+                    "department": payload.department.strip(),
+                    "contact_number": payload.contact_number.strip(),
+                    "address": payload.address.strip(),
+                }
+            },
+        )
+    except DuplicateKeyError as error:
+        raise HTTPException(status_code=409, detail="This email is already in use") from error
+
+    return {
+        "name": name,
+        "email": email,
+        "department": payload.department.strip(),
+        "contact_number": payload.contact_number.strip(),
+        "address": payload.address.strip(),
+    }
+
+
+@router.put("/auth/me/password")
+def change_admin_password(
+    password_data: ChangePassword,
+    current_admin: dict = Depends(require_admin),
+):
+    stored_password = current_admin.get("password")
+    if not stored_password or not verify_password(password_data.current_password, stored_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    users_collection.update_one(
+        {"_id": current_admin["_id"]},
+        {
+            "$set": {"password": hash_password(password_data.new_password)},
+            "$unset": {"must_change_password": ""},
+        },
+    )
+    return {"message": "Password updated successfully."}
 
 
 @router.put("/auth/me/photo")
